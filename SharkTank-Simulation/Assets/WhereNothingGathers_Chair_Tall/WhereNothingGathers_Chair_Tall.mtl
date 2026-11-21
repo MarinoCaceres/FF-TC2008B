@@ -1,0 +1,25 @@
+# Materials for Organization XIII Throne ('Where Nothing Gathers')
+
+newmtl OrgXIII_White
+Kd 0.96 0.97 0.99
+Ka 0.25 0.25 0.27
+Ks 0.45 0.47 0.52
+Ns 120.0
+d 1.0
+illum 2
+
+newmtl OrgXIII_Pedestal
+Kd 0.90 0.91 0.94
+Ka 0.22 0.23 0.25
+Ks 0.35 0.37 0.42
+Ns 90.0
+d 1.0
+illum 2
+
+newmtl OrgXIII_SeatTrim
+Kd 0.84 0.86 0.90
+Ka 0.20 0.21 0.23
+Ks 0.20 0.22 0.25
+Ns 45.0
+d 1.0
+illum 2
