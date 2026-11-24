@@ -9,9 +9,20 @@ from app.schemas import ContextEntry
 
 
 @dataclass
+class ActiveShark:
+    config: SharkConfig
+    agent: Agent
+    modifier1: int
+    modifier2: int
+
+    @property
+    def name(self) -> str:
+        return self.config.name
+
+
+@dataclass
 class Session:
-    sharks: List[SharkConfig]
-    agents: List[Agent]
+    sharks: List[ActiveShark]
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     context: List[ContextEntry] = field(default_factory=list)  # common context pool
 

@@ -39,6 +39,7 @@ MODEL_STRING = _build_model_string()
 
 class SharkConfig(BaseModel):
     name: str
+    description: str  # texto corto para mostrar en la UI
     role: str
     goal: str
     backstory: str

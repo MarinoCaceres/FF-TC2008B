@@ -1,43 +1,68 @@
-from typing import List, Literal, Optional
+from typing import List, Literal
 
 from pydantic import BaseModel, Field
 
 
-class PitchRequest(BaseModel):
-    pitch: str = Field(min_length=1, description="Descripción completa de la idea y el pitch, en texto libre")
+# ---- GET /sharks
+class SharkInfo(BaseModel):
+    name: str
+    description: str
 
 
-class MessageRequest(BaseModel):
-    content: str = Field(min_length=1, description="Respuesta o comentario del usuario a los tiburones")
+class SharksOut(BaseModel):
+    sharks: List[SharkInfo]
 
 
-class SharkReply(BaseModel):
-    """Shark output"""
-    shark: str = ""  # lo llena el servicio, no el LLM
-    type: Literal["pregunta", "calificacion", "decision"]
+# ---- POST /session
+class SharkSetup(BaseModel):
+    name: str
+    modifier1: int = Field(ge=1, le=5)  # escepticismo (1-5): duda de cifras, afirmaciones y supuestos
+    modifier2: int = Field(ge=1, le=5)  # presión (1-5): tono de las preguntas, señala respuestas vagas o evasivas
+
+
+class SessionCreate(BaseModel):
+    sharks: List[SharkSetup] = Field(min_length=1)
+
+
+class SessionCreated(BaseModel):
+    session_id: str
+
+
+# ---- POST /session/{id}
+class UserMessage(BaseModel):
+    recipient: str = "all"  # "all" o el nombre de un tiburón
+    content: str = Field(min_length=1)
+
+
+class SessionMessages(BaseModel):
+    messages: List[UserMessage] = Field(min_length=1)
+
+
+class SharkOutput(BaseModel):
+    """What the LLM must produce (structured output). `summary` is internal, for the context pool."""
+    type: Literal["out", "question", "in"]  # out = no invierte, in = invierte
     message: str = Field(description="Respuesta completa para el usuario, en español de México")
     summary: str = Field(
         description="Resumen en tercera persona, máx. 12 palabras, solo para los demás tiburones. "
         "Ej: 'No le convence el impacto ambiental'"
     )
-    score: Optional[int] = Field(default=None, ge=1, le=10, description="Calificación 1-10 (si aplica)")
-    invests: Optional[bool] = Field(default=None, description="True/False solo si type es 'decision'")
+    attitude: int = Field(ge=-3, le=3, description="Actitud hacia el pitch: -3 lo detesta, 0 neutral, 3 le encanta")
 
 
-class ContextEntry(BaseModel):
-    author: str  # "Usuario" o el nombre del tiburón
-    kind: Literal["usuario", "tiburon"]
-    content: str  # texto completo (lo que ve el usuario)
-    summary: Optional[str] = None  # versión mínima (lo que ven los demás tiburones)
-    reply: Optional[SharkReply] = None
-
-
-class SessionOut(BaseModel):
-    session_id: str
-    sharks: List[str]
-    context: List[ContextEntry]
+class SharkResponse(BaseModel):
+    shark: str
+    type: Literal["out", "question", "in"]
+    content: str
+    attitude: int
 
 
 class RoundOut(BaseModel):
-    session_id: str
-    replies: List[SharkReply]
+    responses: List[SharkResponse]
+
+
+# ---- shared context pool
+class ContextEntry(BaseModel):
+    author: str  # "Usuario" o nombre del tiburón
+    recipient: str  # "all" o nombre del tiburón (solo usuario)
+    content: str  # texto completo
+    summary: str | None = None  # versión mínima que leen los demás tiburones

@@ -3,10 +3,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.config import load_sharks
-from app.schemas import ContextEntry
-from app.services import build_agent, run_round
-from app.session import Session
+from app import session as store  # noqa: E402
+from app.schemas import SharkSetup, UserMessage  # noqa: E402
+from app.services import handle_messages, start_session  # noqa: E402
 
 PITCH = (
     "Hola Tiburones, soy Alex. Mi startup EcoTrack es un sistema de gestión de energía "
@@ -17,25 +16,21 @@ PITCH = (
 
 
 def test_shark_resolves_pitch_end_to_end():
-    sharks = load_sharks()[:1]  # solo un tiburón
-    session = Session(sharks=sharks, agents=[build_agent(s) for s in sharks])
-    session.context.append(ContextEntry(author="Usuario", kind="usuario", content=PITCH))
+    session = start_session([SharkSetup(name="Master Shark", modifier1=3, modifier2=3)])
+    try:
+        responses = handle_messages(session, [UserMessage(recipient="all", content=PITCH)])
 
-    replies = run_round(session)
-
-    assert len(replies) == 1
-    reply = replies[0]
-    assert reply.shark == sharks[0].name
-    assert reply.type in ("pregunta", "calificacion", "decision")
-    assert reply.message.strip()
-    assert reply.summary.strip() and len(reply.summary) < len(reply.message)
-    if reply.type == "calificacion":
-        assert reply.score is not None
-    if reply.type == "decision":
-        assert reply.invests is not None
-    # la respuesta quedó en el pool compartido con su versión mínima
-    assert session.context[-1].summary == reply.summary
-    return reply
+        assert len(responses) == 1
+        r = responses[0]
+        assert r.shark == "Master Shark"
+        assert r.type in ("out", "question", "in")
+        assert r.content.strip()
+        assert -3 <= r.attitude <= 3
+        # la respuesta quedó en el pool compartido con su versión mínima
+        assert session.context[-1].summary and len(session.context[-1].summary) < len(r.content)
+        return r
+    finally:
+        store.remove(session.id)
 
 
 if __name__ == "__main__":
