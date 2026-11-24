@@ -10,7 +10,7 @@ COPY app ./app
 COPY config ./config
 COPY run.py .
 
-RUN useradd --system --uid 10001 appuser
+RUN useradd --system --create-home --uid 10001 appuser
 USER appuser
 
 EXPOSE 8000
