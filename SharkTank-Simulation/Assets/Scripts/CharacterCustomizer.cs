@@ -1,14 +1,16 @@
 using UnityEngine;
+using UnityEngine.Serialization;
 
-public enum PartType { Body = 0, Face = 1, Hair = 2 }
+public enum PartType { Face = 0, Hair = 1, Clothes = 2 }
 
 // Va en la raíz del prefab del personaje (Player).
-// Body y Hair: se activa un solo objeto de la lista y se desactivan los demás.
+// Clothes y Hair: se activa un solo objeto de la lista y se desactivan los demás.
 // Face: se cambia el material del renderer de la cara.
 public class CharacterCustomizer : MonoBehaviour
 {
-    [Header("Body y Hair: objetos del prefab (uno activo a la vez)")]
-    [SerializeField] private GameObject[] bodyOptions;
+    [Header("Clothes y Hair: objetos del prefab (uno activo a la vez)")]
+    [FormerlySerializedAs("bodyOptions")]
+    [SerializeField] private GameObject[] clothesOptions;
     [SerializeField] private GameObject[] hairOptions;
 
     [Header("Face: se cambia el material")]
@@ -17,19 +19,37 @@ public class CharacterCustomizer : MonoBehaviour
     [SerializeField] private int faceMaterialSlot = 0;
     [SerializeField] private Material[] faceMaterials;
 
+    [Header("Iconos para la cuadrícula (opcional, mismo orden que las opciones)")]
+    [SerializeField] private Sprite[] faceIcons;
+    [SerializeField] private Sprite[] hairIcons;
+    [SerializeField] private Sprite[] clothesIcons;
+
     private readonly int[] current = new int[3];
 
     public int GetCount(PartType part)
     {
         switch (part)
         {
-            case PartType.Body: return bodyOptions != null ? bodyOptions.Length : 0;
             case PartType.Face: return faceMaterials != null ? faceMaterials.Length : 0;
-            default: return hairOptions != null ? hairOptions.Length : 0;
+            case PartType.Hair: return hairOptions != null ? hairOptions.Length : 0;
+            default: return clothesOptions != null ? clothesOptions.Length : 0;
         }
     }
 
     public int GetIndex(PartType part) => current[(int)part];
+
+    public Sprite GetIcon(PartType part, int index)
+    {
+        Sprite[] icons;
+        switch (part)
+        {
+            case PartType.Face: icons = faceIcons; break;
+            case PartType.Hair: icons = hairIcons; break;
+            default: icons = clothesIcons; break;
+        }
+
+        return (icons != null && index >= 0 && index < icons.Length) ? icons[index] : null;
+    }
 
     // Aplica la opción "index" (con vuelta al inicio si se pasa)
     public void SetPart(PartType part, int index)
@@ -42,9 +62,9 @@ public class CharacterCustomizer : MonoBehaviour
 
         switch (part)
         {
-            case PartType.Body: ActivateOnly(bodyOptions, index); break;
-            case PartType.Hair: ActivateOnly(hairOptions, index); break;
             case PartType.Face: ApplyFace(index); break;
+            case PartType.Hair: ActivateOnly(hairOptions, index); break;
+            case PartType.Clothes: ActivateOnly(clothesOptions, index); break;
         }
     }
 

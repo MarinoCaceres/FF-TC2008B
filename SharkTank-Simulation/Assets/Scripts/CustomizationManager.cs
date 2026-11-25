@@ -1,35 +1,60 @@
+using System;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
+using TMPro;
 
 public class CustomizationManager : MonoBehaviour
 {
-    [Header("Personajes: 0 = Personaje, 1 a 3 = Jueces")]
-    [SerializeField] private CharacterCustomizer[] characters;
+    // Tarjeta de un juez: rol y un slider por modificador (índice 0 = M1, 1 = M2)
+    [Serializable]
+    public class JudgeCard
+    {
+        public TMP_Text roleLabel;
+        [Tooltip("Tamaño 2: M1 y M2")]
+        public Slider[] sliders;
+        [Tooltip("Opcional, tamaño 2: muestra el tag elegido de M1 y M2")]
+        public TMP_Text[] valueLabels;
+    }
 
-    [Header("Elegir a quién editar (uno por personaje, mismo orden)")]
-    [SerializeField] private Button[] selectButtons;
-    [Tooltip("Opcional: objeto que se activa solo sobre el personaje seleccionado")]
-    [SerializeField] private GameObject[] selectionIndicators;
+    [Header("Personaje (vista previa, solo visible en la pestaña Player)")]
+    [SerializeField] private CharacterCustomizer player;
 
-    [Header("Botones de partes (afectan al personaje seleccionado)")]
-    [SerializeField] private Button bodyPrevious;
-    [SerializeField] private Button bodyNext;
-    [SerializeField] private Button facePrevious;
-    [SerializeField] private Button faceNext;
-    [SerializeField] private Button hairPrevious;
-    [SerializeField] private Button hairNext;
+    [Header("Pestañas principales")]
+    [SerializeField] private Button playerTabButton;
+    [SerializeField] private Button judgesTabButton;
+    [Tooltip("Panel con las categorías y la cuadrícula")]
+    [SerializeField] private GameObject playerPanel;
+    [Tooltip("Panel con las 3 tarjetas de jueces")]
+    [SerializeField] private GameObject judgesPanel;
 
-    [Header("Botones generales")]
-    [SerializeField] private Button confirmButton;
+    [Header("Pestañas de categoría")]
+    [SerializeField] private Button faceTabButton;
+    [SerializeField] private Button hairTabButton;
+    [SerializeField] private Button clothesTabButton;
+
+    [Header("Cuadrícula con scroll")]
+    [Tooltip("Opcional: se regresa arriba al cambiar de categoría")]
+    [SerializeField] private ScrollRect scrollRect;
+    [Tooltip("El Content del ScrollRect (con Grid Layout Group)")]
+    [SerializeField] private Transform gridContent;
+    [SerializeField] private OptionItemUI optionItemPrefab;
+
+    [Header("Jueces: una tarjeta por juez (tamaño 3)")]
+    [SerializeField] private JudgeCard[] judgeCards;
+
+    [Header("Colores de pestañas")]
+    [SerializeField] private Color selectedTabColor = Color.white;
+    [SerializeField] private Color unselectedTabColor = new Color(0.7f, 0.7f, 0.7f, 1f);
+
+    [Header("Volver")]
     [SerializeField] private Button backButton;
-
-    [Header("Escenas")]
-    [SerializeField] private string gameScene = "Game";
     [SerializeField] private string menuScene = "MainMenu";
 
     private GameManager gm;
-    private int selected;
+    private PartType currentPart = PartType.Face;
+    private readonly List<OptionItemUI> items = new List<OptionItemUI>();
 
     private void Start()
     {
@@ -41,102 +66,172 @@ public class CustomizationManager : MonoBehaviour
             return;
         }
 
-        LoadSelection();
+        // Mostrar en el personaje lo que ya estaba guardado
+        gm.ApplyTo(player);
 
-        Bind(bodyPrevious, PartType.Body, -1);
-        Bind(bodyNext, PartType.Body, 1);
-        Bind(facePrevious, PartType.Face, -1);
-        Bind(faceNext, PartType.Face, 1);
-        Bind(hairPrevious, PartType.Hair, -1);
-        Bind(hairNext, PartType.Hair, 1);
+        if (playerTabButton != null) playerTabButton.onClick.AddListener(() => ShowMode(true));
+        if (judgesTabButton != null) judgesTabButton.onClick.AddListener(() => ShowMode(false));
 
-        if (selectButtons != null)
-        {
-            for (int i = 0; i < selectButtons.Length && i < characters.Length; i++)
-            {
-                int index = i; // copia local para el listener
-                if (selectButtons[i] != null) selectButtons[i].onClick.AddListener(() => Select(index));
-            }
-        }
+        BindPartTab(faceTabButton, PartType.Face);
+        BindPartTab(hairTabButton, PartType.Hair);
+        BindPartTab(clothesTabButton, PartType.Clothes);
 
-        if (confirmButton != null) confirmButton.onClick.AddListener(Confirm);
+        SetupJudges();
+
         if (backButton != null) backButton.onClick.AddListener(() => SceneManager.LoadScene(menuScene));
 
-        Select(0);
+        ShowMode(true);
+        ShowPart(PartType.Face);
     }
 
-    private void Bind(Button button, PartType part, int direction)
+    // ---------- Pestañas principales (Player / Judges) ----------
+
+    private void ShowMode(bool showPlayer)
     {
-        if (button != null) button.onClick.AddListener(() => Change(part, direction));
+        if (playerPanel != null) playerPanel.SetActive(showPlayer);
+        if (judgesPanel != null) judgesPanel.SetActive(!showPlayer);
+
+        player.gameObject.SetActive(showPlayer);
+
+        SetTabColor(playerTabButton, showPlayer);
+        SetTabColor(judgesTabButton, !showPlayer);
     }
 
-    private void Select(int index)
-    {
-        selected = index;
+    // ---------- Categorías (Face / Hair / Clothes) y cuadrícula ----------
 
-        if (selectionIndicators == null) return;
-        for (int i = 0; i < selectionIndicators.Length; i++)
+    private void BindPartTab(Button button, PartType part)
+    {
+        if (button != null) button.onClick.AddListener(() => ShowPart(part));
+    }
+
+    private void ShowPart(PartType part)
+    {
+        currentPart = part;
+
+        SetTabColor(faceTabButton, part == PartType.Face);
+        SetTabColor(hairTabButton, part == PartType.Hair);
+        SetTabColor(clothesTabButton, part == PartType.Clothes);
+
+        RebuildGrid();
+    }
+
+    private void RebuildGrid()
+    {
+        foreach (Transform child in gridContent)
         {
-            if (selectionIndicators[i] != null) selectionIndicators[i].SetActive(i == index);
+            child.gameObject.SetActive(false); // evita que el layout lo cuente este frame
+            Destroy(child.gameObject);
+        }
+        items.Clear();
+
+        int count = player.GetCount(currentPart);
+        int selectedIndex = player.GetIndex(currentPart);
+
+        for (int i = 0; i < count; i++)
+        {
+            OptionItemUI item = Instantiate(optionItemPrefab, gridContent);
+            item.Setup(i, player.GetIcon(currentPart, i), i == selectedIndex, OnOptionClicked);
+            items.Add(item);
+        }
+
+        if (scrollRect != null)
+        {
+            Canvas.ForceUpdateCanvases();
+            scrollRect.verticalNormalizedPosition = 1f;
         }
     }
 
-    // Cambia una parte del personaje seleccionado (da la vuelta al llegar al final)
-    private void Change(PartType part, int direction)
+    private void OnOptionClicked(int index)
     {
-        CharacterCustomizer character = characters[selected];
-        character.SetPart(part, character.GetIndex(part) + direction);
-    }
+        player.SetPart(currentPart, index);
 
-    private void LoadSelection()
-    {
-        for (int c = 0; c < characters.Length; c++)
-        {
-            foreach (PartType part in GameManager.Parts)
-            {
-                characters[c].SetPart(part, gm.GetPart(c, part));
-            }
-        }
-    }
-
-    private void Confirm()
-    {
-        for (int c = 0; c < characters.Length; c++)
-        {
-            foreach (PartType part in GameManager.Parts)
-            {
-                gm.SetPart(c, part, characters[c].GetIndex(part));
-            }
-        }
-
+        gm.SetPart(currentPart, index);
         gm.Save();
-        SceneManager.LoadScene(gameScene);
+
+        foreach (OptionItemUI item in items)
+        {
+            item.SetSelected(item.Index == index);
+        }
     }
+
+    private void SetTabColor(Button tab, bool selected)
+    {
+        if (tab != null && tab.targetGraphic != null)
+        {
+            tab.targetGraphic.color = selected ? selectedTabColor : unselectedTabColor;
+        }
+    }
+
+    // ---------- Jueces ----------
+
+    private void SetupJudges()
+    {
+        if (judgeCards == null) return;
+
+        int cards = Mathf.Min(judgeCards.Length, GameManager.JudgeCount);
+
+        for (int j = 0; j < cards; j++)
+        {
+            JudgeCard card = judgeCards[j];
+            if (card == null) continue;
+
+            if (card.roleLabel != null) card.roleLabel.text = gm.GetJudgeRole(j);
+            if (card.sliders == null) continue;
+
+            int sliderCount = Mathf.Min(card.sliders.Length, GameManager.ModifierCount);
+
+            for (int m = 0; m < sliderCount; m++)
+            {
+                Slider slider = card.sliders[m];
+                if (slider == null) continue;
+
+                int judge = j; // copias locales para el listener
+                int modifier = m;
+
+                // Un punto del slider por cada tag definido
+                slider.wholeNumbers = true;
+                slider.minValue = 0;
+                slider.maxValue = gm.GetModifierOptions(m).Length - 1;
+                slider.SetValueWithoutNotify(gm.GetJudgeModifierIndex(j, m));
+                slider.onValueChanged.AddListener(value => OnModifierChanged(judge, modifier, Mathf.RoundToInt(value)));
+
+                RefreshModifierLabel(judge, modifier);
+            }
+        }
+    }
+
+    private void OnModifierChanged(int judge, int modifier, int index)
+    {
+        gm.SetJudgeModifierIndex(judge, modifier, index);
+        gm.Save();
+
+        RefreshModifierLabel(judge, modifier);
+    }
+
+    private void RefreshModifierLabel(int judge, int modifier)
+    {
+        JudgeCard card = judgeCards[judge];
+
+        if (card.valueLabels != null && modifier < card.valueLabels.Length && card.valueLabels[modifier] != null)
+        {
+            card.valueLabels[modifier].text = gm.GetJudgeTag(judge, modifier);
+        }
+    }
+
+    // ---------- Validación ----------
 
     private bool ValidateSetup()
     {
-        if (characters == null || characters.Length != GameManager.CharacterCount)
+        if (player == null)
         {
-            Debug.LogError("Asigna exactamente 4 personajes (1 personaje + 3 jueces).");
+            Debug.LogError("Asigna el personaje (el que tiene CharacterCustomizer) en el campo Player.");
             return false;
         }
 
-        foreach (CharacterCustomizer c in characters)
+        if (gridContent == null || optionItemPrefab == null)
         {
-            if (c == null)
-            {
-                Debug.LogError("Hay un personaje sin asignar en la lista.");
-                return false;
-            }
-
-            foreach (PartType part in GameManager.Parts)
-            {
-                if (c.GetCount(part) < 1)
-                {
-                    Debug.LogError(part + " no tiene opciones en " + c.name + ". Revisa que exista un hijo llamado '" + part + "' con las opciones dentro.");
-                    return false;
-                }
-            }
+            Debug.LogError("Asigna Grid Content (el Content del ScrollRect) y Option Item Prefab.");
+            return false;
         }
 
         return true;
