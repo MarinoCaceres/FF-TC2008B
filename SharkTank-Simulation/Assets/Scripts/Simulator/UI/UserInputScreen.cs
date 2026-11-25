@@ -196,6 +196,29 @@ namespace SharkTank.UI
         }
 
         /// <summary>
+        /// Hides the input screen and waits for its fade-out transition to complete.
+        /// </summary>
+        /// <param name="restoreCameraPose">Whether to move the camera back to its saved pose while hiding.</param>
+        public IEnumerator HideAndWait(bool restoreCameraPose = true)
+        {
+            if (restoreCameraPose)
+            {
+                ReturnCameraToPreviousPose();
+            }
+            else
+            {
+                StopCameraMotion();
+                hasPreviousCameraPose = false;
+            }
+
+            StartTransition(false);
+            while (transitionCoroutine != null)
+            {
+                yield return null;
+            }
+        }
+
+        /// <summary>
         /// Immediately cuts the presentation camera to an existing scene pose.
         /// </summary>
         /// <param name="targetPose">The transform defining the camera position and rotation.</param>
@@ -219,6 +242,7 @@ namespace SharkTank.UI
             }
 
             StopCameraMotion();
+            hasPreviousCameraPose = false;
             presentationCamera.transform.SetPositionAndRotation(targetPose.position, targetPose.rotation);
         }
 

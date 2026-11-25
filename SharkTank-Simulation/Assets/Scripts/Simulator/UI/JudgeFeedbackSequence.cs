@@ -33,6 +33,8 @@ namespace SharkTank.UI
         [SerializeField] private JudgeSpeechUI speechUI;
         [Tooltip("Pause after the chairs settle, in seconds.")]
         [SerializeField] private float settledPause = 0.6f;
+        [Tooltip("Pause on the judges' wide shot before their chairs move, in seconds.")]
+        [SerializeField] private float judgesDecisionPause = 1f;
         [Tooltip("Pause on the top-down judge overview before moving to the player, in seconds.")]
         [SerializeField] private float topDownOverviewPause = 3f;
 
@@ -57,6 +59,11 @@ namespace SharkTank.UI
         /// Occurs when a judge's liked or criticized speech box is shown.
         /// </summary>
         public event Action<int, int> OnSpeechBoxShown;
+
+        /// <summary>
+        /// Gets whether a feedback sequence is currently running.
+        /// </summary>
+        public bool IsPlaying => sequenceCoroutine != null;
 
         private void Awake()
         {
@@ -97,22 +104,24 @@ namespace SharkTank.UI
         /// </summary>
         /// <param name="feedback">Already-split feedback data in judge order.</param>
         /// <param name="isPitchRound">Whether the feedback follows the initial pitch.</param>
-        public void Play(IList<JudgeFeedbackData> feedback, bool isPitchRound)
+        /// <returns>True when the feedback sequence starts successfully.</returns>
+        public bool Play(IList<JudgeFeedbackData> feedback, bool isPitchRound)
         {
             if (sequenceCoroutine != null)
             {
                 Debug.LogWarning("JudgeFeedbackSequence is already playing a feedback sequence.", this);
-                return;
+                return false;
             }
 
             if (!ValidateInput(feedback))
             {
-                return;
+                return false;
             }
 
             arrowPressed = false;
             continuePressed = false;
             sequenceCoroutine = StartCoroutine(RunSequence(feedback, isPitchRound));
+            return true;
         }
 
         [ContextMenu("Test: Feedback Round 1")]
@@ -183,6 +192,10 @@ namespace SharkTank.UI
             yield return speechUI.Hide();
 
             cameraController.CutCameraToPose(judgesOverviewPoint);
+            if (judgesDecisionPause > 0f)
+            {
+                yield return new WaitForSecondsRealtime(judgesDecisionPause);
+            }
 
             List<int> attitudes = new List<int>(JudgeCount);
             for (int i = 0; i < JudgeCount; i++)
