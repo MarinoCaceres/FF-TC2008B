@@ -14,8 +14,9 @@ namespace SharkTank.UI.Editor
     /// </summary>
     internal static class BuildUserInputScreenUI
     {
-        private const string CanvasName = "Canvas_UI";
+        private const string CanvasName = "Canvas";
         private const string UserInputRootName = "UserInput";
+        private const string ControllerObjectName = "UserInputScreenController";
         private static readonly Vector2 ReferenceResolution = new Vector2(1920f, 1080f);
         private static readonly string[] JudgeCameraPoseNames =
         {
@@ -35,56 +36,145 @@ namespace SharkTank.UI.Editor
             }
 
             UnityEngine.SceneManagement.Scene activeScene = EditorSceneManager.GetActiveScene();
-            Canvas canvas = GetOrCreateSharedCanvas(activeScene);
-            EnsureEventSystem();
-
-            Transform existingUserInput = canvas.transform.Find(UserInputRootName);
-            if (existingUserInput != null)
+            Canvas canvas = GetSharedCanvas(activeScene);
+            if (canvas == null)
             {
-                UserInputScreen existingScreen = existingUserInput.GetComponent<UserInputScreen>();
-                if (existingScreen != null)
-                {
-                    SerializedObject serializedExistingScreen = new SerializedObject(existingScreen);
-                    AssignCameraReferences(serializedExistingScreen);
-                    serializedExistingScreen.ApplyModifiedPropertiesWithoutUndo();
-                    EditorSceneManager.MarkSceneDirty(activeScene);
-                }
-
-                Transform inputFieldTransform = existingUserInput.Find("BottomPanel/ResponseInputField");
-                GameObject selectionTarget = inputFieldTransform != null
-                    ? inputFieldTransform.gameObject
-                    : existingUserInput.gameObject;
-                Selection.activeGameObject = selectionTarget;
-                EditorGUIUtility.PingObject(selectionTarget);
-                Debug.Log("Existing UserInput was preserved. Edit its named UI objects in the Inspector; delete UserInput only to rebuild it.");
                 return;
             }
 
-            GameObject userInputRoot = new GameObject(UserInputRootName, typeof(RectTransform), typeof(CanvasGroup));
-            Undo.RegisterCreatedObjectUndo(userInputRoot, "Build User Input Screen");
-            userInputRoot.transform.SetParent(canvas.transform, false);
-            RectTransform userInputRect = userInputRoot.GetComponent<RectTransform>();
-            userInputRect.anchorMin = Vector2.zero;
-            userInputRect.anchorMax = Vector2.one;
-            userInputRect.offsetMin = Vector2.zero;
-            userInputRect.offsetMax = Vector2.zero;
-            userInputRoot.GetComponent<CanvasGroup>().alpha = 1f;
-            UserInputScreen screen = userInputRoot.AddComponent<UserInputScreen>();
+            EnsureEventSystem();
 
-            Sprite roundedSprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Background.psd");
-            TMP_Text taskText = BuildTaskPanel(userInputRoot.transform, defaultFont, roundedSprite);
-            BuildBottomPanel(userInputRoot.transform, defaultFont, roundedSprite, out TMP_InputField inputField, out TMP_Text placeholder, out Button enterButton);
+            Transform existingUserInput = canvas.transform.Find(UserInputRootName);
+            GameObject userInputRoot;
+            TMP_Text taskText;
+            TMP_InputField inputField;
+            TMP_Text placeholder;
+            Button enterButton;
+            if (existingUserInput != null)
+            {
+                userInputRoot = existingUserInput.gameObject;
+                taskText = FindComponent<TMP_Text>(existingUserInput, "TaskPanel/CurrentTaskLabel");
+                inputField = FindComponent<TMP_InputField>(existingUserInput, "BottomPanel/ResponseInputField");
+                placeholder = FindComponent<TMP_Text>(existingUserInput, "BottomPanel/ResponseInputField/Viewport/Placeholder");
+                enterButton = FindComponent<Button>(existingUserInput, "BottomPanel/EnterButton");
+            }
+            else
+            {
+                userInputRoot = new GameObject(UserInputRootName, typeof(RectTransform), typeof(CanvasGroup));
+                Undo.RegisterCreatedObjectUndo(userInputRoot, "Build User Input Screen");
+                userInputRoot.transform.SetParent(canvas.transform, false);
+                RectTransform userInputRect = userInputRoot.GetComponent<RectTransform>();
+                userInputRect.anchorMin = Vector2.zero;
+                userInputRect.anchorMax = Vector2.one;
+                userInputRect.offsetMin = Vector2.zero;
+                userInputRect.offsetMax = Vector2.zero;
+                userInputRoot.GetComponent<CanvasGroup>().alpha = 1f;
+
+                Sprite roundedSprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Background.psd");
+                taskText = BuildTaskPanel(userInputRoot.transform, defaultFont, roundedSprite);
+                BuildBottomPanel(userInputRoot.transform, defaultFont, roundedSprite, out inputField, out placeholder, out enterButton);
+            }
+
+            CanvasGroup rootGroup = userInputRoot.GetComponent<CanvasGroup>();
+            if (rootGroup == null)
+            {
+                rootGroup = Undo.AddComponent<CanvasGroup>(userInputRoot);
+            }
+
+            RectTransform bottomPanel = userInputRoot.transform.Find("BottomPanel") as RectTransform;
+            UserInputScreen oldScreen = userInputRoot.GetComponent<UserInputScreen>();
+            UserInputScreen screen = GetOrCreateController(activeScene, canvas, oldScreen);
 
             SerializedObject serializedScreen = new SerializedObject(screen);
-            serializedScreen.FindProperty("rootGroup").objectReferenceValue = userInputRoot.GetComponent<CanvasGroup>();
+            serializedScreen.FindProperty("rootGroup").objectReferenceValue = rootGroup;
             serializedScreen.FindProperty("currentTaskLabel").objectReferenceValue = taskText;
             serializedScreen.FindProperty("inputField").objectReferenceValue = inputField;
             serializedScreen.FindProperty("placeholderLabel").objectReferenceValue = placeholder;
             serializedScreen.FindProperty("enterButton").objectReferenceValue = enterButton;
+            serializedScreen.FindProperty("bottomPanel").objectReferenceValue = bottomPanel;
             AssignCameraReferences(serializedScreen);
             serializedScreen.ApplyModifiedPropertiesWithoutUndo();
 
+            AssignJudgeSequenceCameraController(activeScene, screen);
             EditorSceneManager.MarkSceneDirty(activeScene);
+
+            Transform inputFieldTransform = userInputRoot.transform.Find("BottomPanel/ResponseInputField");
+            GameObject selectionTarget = inputFieldTransform != null
+                ? inputFieldTransform.gameObject
+                : userInputRoot;
+            Selection.activeGameObject = selectionTarget;
+            EditorGUIUtility.PingObject(selectionTarget);
+            Debug.Log("UserInput stays under Canvas; its UserInputScreenController is managed separately outside Canvas.");
+        }
+
+        private static UserInputScreen GetOrCreateController(
+            UnityEngine.SceneManagement.Scene scene,
+            Canvas canvas,
+            UserInputScreen oldScreen)
+        {
+            GameObject controllerObject = FindSceneObject(scene, ControllerObjectName);
+            if (controllerObject == null)
+            {
+                controllerObject = new GameObject(ControllerObjectName);
+                Undo.RegisterCreatedObjectUndo(controllerObject, "Create User Input Screen Controller");
+            }
+            else if (controllerObject.transform.IsChildOf(canvas.transform))
+            {
+                Undo.SetTransformParent(controllerObject.transform, null, "Move User Input Controller Outside Canvas");
+            }
+
+            UserInputScreen controller = controllerObject.GetComponent<UserInputScreen>();
+            if (controller == null)
+            {
+                controller = Undo.AddComponent<UserInputScreen>(controllerObject);
+            }
+
+            if (oldScreen != null && oldScreen != controller)
+            {
+                Undo.RecordObject(controller, "Move User Input Screen Controller");
+                EditorUtility.CopySerialized(oldScreen, controller);
+                Undo.DestroyObjectImmediate(oldScreen);
+            }
+
+            return controller;
+        }
+
+        private static void AssignJudgeSequenceCameraController(
+            UnityEngine.SceneManagement.Scene scene,
+            UserInputScreen controller)
+        {
+            JudgeFeedbackSequence[] sequences = Resources.FindObjectsOfTypeAll<JudgeFeedbackSequence>();
+            for (int i = 0; i < sequences.Length; i++)
+            {
+                if (sequences[i].gameObject.scene != scene)
+                {
+                    continue;
+                }
+
+                SerializedObject serializedSequence = new SerializedObject(sequences[i]);
+                serializedSequence.FindProperty("cameraController").objectReferenceValue = controller;
+                serializedSequence.ApplyModifiedPropertiesWithoutUndo();
+            }
+        }
+
+        private static GameObject FindSceneObject(UnityEngine.SceneManagement.Scene scene, string objectName)
+        {
+            GameObject[] sceneObjects = Resources.FindObjectsOfTypeAll<GameObject>();
+            for (int i = 0; i < sceneObjects.Length; i++)
+            {
+                if (sceneObjects[i].name == objectName && sceneObjects[i].scene == scene)
+                {
+                    return sceneObjects[i];
+                }
+            }
+
+            return null;
+        }
+
+        private static T FindComponent<T>(Transform root, string path) where T : Component
+        {
+            Transform target = root.Find(path);
+            return target != null ? target.GetComponent<T>() : null;
         }
 
         private static void AssignCameraReferences(SerializedObject serializedScreen)
@@ -104,7 +194,7 @@ namespace SharkTank.UI.Editor
             }
         }
 
-        private static Canvas GetOrCreateSharedCanvas(UnityEngine.SceneManagement.Scene scene)
+        internal static Canvas GetSharedCanvas(UnityEngine.SceneManagement.Scene scene)
         {
             GameObject[] sceneObjects = Resources.FindObjectsOfTypeAll<GameObject>();
             foreach (GameObject sceneObject in sceneObjects)
@@ -120,23 +210,8 @@ namespace SharkTank.UI.Editor
                 }
             }
 
-            Canvas[] canvases = Resources.FindObjectsOfTypeAll<Canvas>();
-            foreach (Canvas existingCanvas in canvases)
-            {
-                if (existingCanvas.isRootCanvas &&
-                    existingCanvas.renderMode == RenderMode.ScreenSpaceOverlay &&
-                    existingCanvas.gameObject.scene == scene)
-                {
-                    ConfigureSharedCanvas(existingCanvas);
-                    return existingCanvas;
-                }
-            }
-
-            GameObject canvasObject = new GameObject(CanvasName, typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
-            Undo.RegisterCreatedObjectUndo(canvasObject, "Create Shared UI Canvas");
-            Canvas canvas = canvasObject.GetComponent<Canvas>();
-            ConfigureSharedCanvas(canvas);
-            return canvas;
+            Debug.LogError("Could not find a Canvas object named exactly \"Canvas\" in the active scene. No Canvas was created.");
+            return null;
         }
 
         private static void ConfigureSharedCanvas(Canvas canvas)
@@ -162,7 +237,7 @@ namespace SharkTank.UI.Editor
 
         private static void EnsureEventSystem()
         {
-            EventSystem eventSystem = UnityEngine.Object.FindFirstObjectByType<EventSystem>();
+            EventSystem eventSystem = UnityEngine.Object.FindAnyObjectByType<EventSystem>();
             if (eventSystem == null)
             {
                 GameObject eventSystemObject = new GameObject("EventSystem", typeof(EventSystem));
@@ -189,7 +264,7 @@ namespace SharkTank.UI.Editor
         private static TMP_Text BuildTaskPanel(Transform parent, TMP_FontAsset font, Sprite roundedSprite)
         {
             RectTransform panel = CreateRect("TaskPanel", parent, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(60f, -54f), new Vector2(520f, 110f));
-            CreatePanelBackground(panel, roundedSprite, UITheme.Accent, Vector2.zero, Vector2.zero);
+            CreatePanelBackground(panel, roundedSprite, UITheme.PanelAccent, Vector2.zero, Vector2.zero);
             CreatePanelBackground(panel, roundedSprite, UITheme.PanelBackground, new Vector2(2f, 2f), new Vector2(-2f, -2f));
 
             CreateText("TaskHeading", panel, font, "TAREA ACTUAL", 18f, UITheme.Accent, TextAlignmentOptions.Left,
@@ -197,7 +272,7 @@ namespace SharkTank.UI.Editor
 
             TMP_Text taskText = CreateText("CurrentTaskLabel", panel, font, "Presenta tu pitch", 28f, UITheme.TextCream, TextAlignmentOptions.Left,
                 new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(0f, 0f), new Vector2(22f, 14f), new Vector2(-44f, -42f));
-            taskText.enableWordWrapping = true;
+            taskText.textWrappingMode = TextWrappingModes.Normal;
             return taskText;
         }
 
@@ -206,7 +281,7 @@ namespace SharkTank.UI.Editor
         {
             RectTransform bottomPanel = CreateRect("BottomPanel", parent, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
                 new Vector2(0f, 40f), new Vector2(1700f, 220f));
-            CreatePanelBackground(bottomPanel, roundedSprite, UITheme.Accent, Vector2.zero, Vector2.zero);
+            CreatePanelBackground(bottomPanel, roundedSprite, UITheme.PanelAccent, Vector2.zero, Vector2.zero);
             CreatePanelBackground(bottomPanel, roundedSprite, UITheme.PanelBackground, new Vector2(3f, 3f), new Vector2(-3f, -3f));
 
             RectTransform inputRect = CreateRect("ResponseInputField", bottomPanel, Vector2.zero, Vector2.zero, Vector2.zero,
@@ -229,7 +304,7 @@ namespace SharkTank.UI.Editor
             inputText.font = font;
             inputText.fontSize = 24f;
             inputText.color = UITheme.TextCream;
-            inputText.enableWordWrapping = true;
+            inputText.textWrappingMode = TextWrappingModes.Normal;
             inputText.alignment = TextAlignmentOptions.TopLeft;
             inputText.raycastTarget = false;
             textRect.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
@@ -241,7 +316,7 @@ namespace SharkTank.UI.Editor
             placeholder.fontSize = 24f;
             placeholder.color = new Color(UITheme.TextCream.r, UITheme.TextCream.g, UITheme.TextCream.b, 0.55f);
             placeholder.text = "Escribe tu pitch aquí...";
-            placeholder.enableWordWrapping = true;
+            placeholder.textWrappingMode = TextWrappingModes.Normal;
             placeholder.alignment = TextAlignmentOptions.TopLeft;
             placeholder.raycastTarget = false;
 
@@ -321,7 +396,7 @@ namespace SharkTank.UI.Editor
             textComponent.fontSize = fontSize;
             textComponent.color = color;
             textComponent.alignment = alignment;
-            textComponent.enableWordWrapping = true;
+            textComponent.textWrappingMode = TextWrappingModes.Normal;
             textComponent.raycastTarget = false;
             return textComponent;
         }

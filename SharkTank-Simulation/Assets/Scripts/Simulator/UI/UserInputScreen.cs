@@ -31,6 +31,8 @@ namespace SharkTank.UI
         [SerializeField] private TMP_Text placeholderLabel;
         [Tooltip("Button that submits the response.")]
         [SerializeField] private Button enterButton;
+        [Tooltip("Bottom panel animated while the input screen is shown.")]
+        [SerializeField] private RectTransform bottomPanel;
 
         [Header("Camera framing")]
         [Tooltip("Camera moved to the input-screen pose while this screen is visible.")]
@@ -61,7 +63,6 @@ namespace SharkTank.UI
         [Min(0.1f)]
         [SerializeField] private float judgeVerticalPanCycleDuration = 4.5f;
 
-        private RectTransform bottomPanel;
         private Vector2 bottomPanelVisiblePosition;
         private Coroutine transitionCoroutine;
         private Coroutine cameraTransitionCoroutine;
@@ -104,14 +105,18 @@ namespace SharkTank.UI
                 enterButton.onClick.AddListener(HandleSubmit);
             }
 
-            Transform panelTransform = transform.Find("BottomPanel");
-            if (panelTransform != null)
+            if (bottomPanel == null && rootGroup != null)
             {
-                bottomPanel = panelTransform as RectTransform;
-                if (bottomPanel != null)
+                Transform panelTransform = rootGroup.transform.Find("BottomPanel");
+                if (panelTransform != null)
                 {
-                    bottomPanelVisiblePosition = bottomPanel.anchoredPosition;
+                    bottomPanel = panelTransform as RectTransform;
                 }
+            }
+
+            if (bottomPanel != null)
+            {
+                bottomPanelVisiblePosition = bottomPanel.anchoredPosition;
             }
 
             canInteract = false;
@@ -188,6 +193,71 @@ namespace SharkTank.UI
         {
             ReturnCameraToPreviousPose();
             StartTransition(false);
+        }
+
+        /// <summary>
+        /// Immediately cuts the presentation camera to an existing scene pose.
+        /// </summary>
+        /// <param name="targetPose">The transform defining the camera position and rotation.</param>
+        public void CutCameraToPose(Transform targetPose)
+        {
+            if (targetPose == null)
+            {
+                Debug.LogWarning("UserInputScreen cannot cut the camera to a missing pose.", this);
+                return;
+            }
+
+            if (presentationCamera == null)
+            {
+                presentationCamera = Camera.main;
+            }
+
+            if (presentationCamera == null)
+            {
+                Debug.LogWarning("UserInputScreen cannot cut the camera because the presentation camera is missing.", this);
+                return;
+            }
+
+            StopCameraMotion();
+            presentationCamera.transform.SetPositionAndRotation(targetPose.position, targetPose.rotation);
+        }
+
+        /// <summary>
+        /// Smoothly moves the presentation camera to an existing scene pose.
+        /// </summary>
+        /// <param name="targetPose">The transform defining the camera position and rotation.</param>
+        public IEnumerator MoveCameraToPose(Transform targetPose)
+        {
+            return MoveCameraToPose(targetPose, 0f);
+        }
+
+        /// <summary>
+        /// Smoothly moves the presentation camera to an existing scene pose with a local-right offset.
+        /// </summary>
+        /// <param name="targetPose">The transform defining the camera position and rotation.</param>
+        /// <param name="rightOffset">World-unit offset along the pose's right direction.</param>
+        public IEnumerator MoveCameraToPose(Transform targetPose, float rightOffset)
+        {
+            if (targetPose == null)
+            {
+                Debug.LogWarning("UserInputScreen cannot move the camera to a missing pose.", this);
+                yield break;
+            }
+
+            if (presentationCamera == null)
+            {
+                presentationCamera = Camera.main;
+            }
+
+            if (presentationCamera == null)
+            {
+                Debug.LogWarning("UserInputScreen cannot move the camera because the presentation camera is missing.", this);
+                yield break;
+            }
+
+            StopCameraMotion();
+            Vector3 targetPosition = targetPose.position + targetPose.right * rightOffset;
+            yield return MoveCameraToPose(targetPosition, targetPose.rotation, cameraTransitionDuration);
         }
 
         /// <summary>
@@ -335,6 +405,17 @@ namespace SharkTank.UI
             }
 
             cameraTransitionCoroutine = StartCoroutine(AnimateCamera(targetPosition, targetRotation, returning, panAfterArrival, focusPoint));
+        }
+
+        private void StopCameraMotion()
+        {
+            if (cameraTransitionCoroutine == null)
+            {
+                return;
+            }
+
+            StopCoroutine(cameraTransitionCoroutine);
+            cameraTransitionCoroutine = null;
         }
 
         private IEnumerator AnimateCamera(Vector3 targetPosition, Quaternion targetRotation, bool returning,
