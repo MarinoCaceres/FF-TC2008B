@@ -1,4 +1,4 @@
-from typing import List, Literal
+from typing import Dict, List, Literal
 
 from pydantic import BaseModel, Field
 
@@ -40,8 +40,12 @@ class SessionMessages(BaseModel):
 
 class SharkOutput(BaseModel):
     """What the LLM must produce (structured output). `summary` is internal, for the context pool."""
-    type: Literal["out", "question", "in"]  # out = no invierte, in = invierte
-    message: str = Field(description="Respuesta completa para el usuario, en español de México")
+    type: Literal["out", "question", "in"]  # out = rechaza con feedback, question = pregunta, in = hace una oferta
+    message: str = Field(
+        min_length=1,
+        description="Texto para el usuario, siempre presente: retroalimentación si type=out, "
+        "la pregunta si type=question, la oferta (monto y porcentaje) si type=in. Español de México",
+    )
     summary: str = Field(
         description="Resumen en tercera persona, máx. 12 palabras, solo para los demás tiburones. "
         "Ej: 'No le convence el impacto ambiental'"
@@ -56,8 +60,12 @@ class SharkResponse(BaseModel):
     attitude: int
 
 
+SharkStatus = Literal["pending", "question", "in", "out"]  # pending = aún no responde; out es definitivo
+
+
 class RoundOut(BaseModel):
     responses: List[SharkResponse]
+    statuses: Dict[str, SharkStatus]  # estado actual de cada tiburón de la sesión
 
 
 # ---- shared context pool

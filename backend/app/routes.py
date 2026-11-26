@@ -38,18 +38,17 @@ def create_session(request: SessionCreate):
 
 
 @router.post("/session/{session_id}", response_model=RoundOut, summary="Mandar mensajes a los tiburones")
-def send_messages(session_id: str, request: SessionMessages):
+async def send_messages(session_id: str, request: SessionMessages):
     session = store.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
     try:
-        responses = handle_messages(session, request.messages)
+        return await handle_messages(session, request.messages)
     except InvalidRequest as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         logger.exception("Error en la ronda de tiburones")
         raise HTTPException(status_code=500, detail=f"Error en la ronda de tiburones: {e}")
-    return RoundOut(responses=responses)
 
 
 @router.delete("/session/{session_id}", summary="Terminar la sesión")

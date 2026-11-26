@@ -1,19 +1,19 @@
-import uuid
+import asyncio
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import TYPE_CHECKING, Dict
 
 from crewai import Agent
 
 from app.config import SharkConfig
-from app.schemas import ContextEntry
+
+if TYPE_CHECKING:  # el Flow vive en services; solo se importa para tipos
+    from app.services import SharkTankFlow
 
 
 @dataclass
 class ActiveShark:
     config: SharkConfig
     agent: Agent
-    modifier1: int
-    modifier2: int
 
     @property
     def name(self) -> str:
@@ -22,9 +22,12 @@ class ActiveShark:
 
 @dataclass
 class Session:
-    sharks: List[ActiveShark]
-    id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    context: List[ContextEntry] = field(default_factory=list)  # common context pool
+    flow: "SharkTankFlow"
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)  # una ronda a la vez por sesión
+
+    @property
+    def id(self) -> str:
+        return self.flow.state.id
 
 
 _sessions: Dict[str, Session] = {}

@@ -43,6 +43,7 @@ class SharkConfig(BaseModel):
     role: str
     goal: str
     backstory: str
+    style: str = ""  # regla de formato obligatoria (opcional), p. ej. respuestas de una palabra
 
 
 def load_sharks() -> List[SharkConfig]:
