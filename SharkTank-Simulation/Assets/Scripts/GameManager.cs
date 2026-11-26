@@ -6,27 +6,29 @@ public class GameManager : MonoBehaviour
 
     public const int JudgeCount = 3;
     public const int ModifierCount = 2; // M1 y M2
+    public const int MinValue = 1;      // el valor más bajo del slider
+    public const int MaxValue = 5;      // el valor más alto del slider
     public static readonly PartType[] Parts = { PartType.Face, PartType.Hair, PartType.Clothes };
 
     // ---------------- DATOS DUMMY (cámbialos cuando tengas los reales) ----------------
 
-    // Rol que se muestra en la tarjeta de cada juez
+    // Rol que se muestra en la tarjeta de cada juez (solo si Overwrite Role Text está activo)
     private static readonly string[] JudgeRoles = { "Rol 1", "Rol 2", "Rol 3" };
 
-    // Puntos definidos del slider de cada modificador (cada punto es un tag string)
-    private static readonly string[][] ModifierOptions =
+    // Valor inicial de cada juez: [juez, modificador] -> 1 a 5
+    private static readonly int[,] DefaultValues =
     {
-        new[] { "M1_A", "M1_B", "M1_C", "M1_D" },         // M1
-        new[] { "M2_A", "M2_B", "M2_C", "M2_D", "M2_E" }  // M2
+        { 1, 3 },  // juez 0: M1, M2
+        { 5, 2 },  // juez 1
+        { 4, 5 }   // juez 2
     };
-
-    // Punto inicial de cada juez: [juez, modificador]
-    private static readonly int[,] DefaultModifierIndices = { { 0, 2 }, { 1, 0 }, { 3, 4 } };
 
     // ------------------------------------------------------------------------------
 
     private readonly int[] playerSelection = new int[3];
-    private readonly int[] judgeModifiers = new int[JudgeCount * ModifierCount];
+
+    // Una variable entera por slider: 3 jueces x 2 modificadores = 6 valores
+    private readonly int[] judgeValues = new int[JudgeCount * ModifierCount];
 
     // Se crea solo antes de cargar cualquier escena: no hace falta ponerlo en el Hierarchy
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
@@ -66,20 +68,13 @@ public class GameManager : MonoBehaviour
     // ---- Jueces ---- (judge: 0, 1 o 2 | modifier: 0 = M1, 1 = M2)
     public string GetJudgeRole(int judge) => JudgeRoles[judge];
 
-    public string[] GetModifierOptions(int modifier) => ModifierOptions[modifier];
+    // Valor de 1 a 5. Ej: GetJudgeValue(0, 0) -> M1 del primer juez
+    public int GetJudgeValue(int judge, int modifier) => judgeValues[ModifierSlot(judge, modifier)];
 
-    public int GetJudgeModifierIndex(int judge, int modifier) => judgeModifiers[ModifierSlot(judge, modifier)];
-
-    public void SetJudgeModifierIndex(int judge, int modifier, int index)
+    // Guarda el valor, limitado entre MinValue y MaxValue
+    public void SetJudgeValue(int judge, int modifier, int value)
     {
-        int max = ModifierOptions[modifier].Length - 1;
-        judgeModifiers[ModifierSlot(judge, modifier)] = Mathf.Clamp(index, 0, max);
-    }
-
-    // El tag (string) que el juez tiene elegido en ese modificador. Ej: GetJudgeTag(0, 0) -> "M1_C"
-    public string GetJudgeTag(int judge, int modifier)
-    {
-        return ModifierOptions[modifier][GetJudgeModifierIndex(judge, modifier)];
+        judgeValues[ModifierSlot(judge, modifier)] = Mathf.Clamp(value, MinValue, MaxValue);
     }
 
     // ---- Guardado ----
@@ -94,7 +89,7 @@ public class GameManager : MonoBehaviour
         {
             for (int m = 0; m < ModifierCount; m++)
             {
-                PlayerPrefs.SetInt(JudgeKey(j, m), GetJudgeModifierIndex(j, m));
+                PlayerPrefs.SetInt(JudgeKey(j, m), GetJudgeValue(j, m));
             }
         }
 
@@ -112,8 +107,7 @@ public class GameManager : MonoBehaviour
         {
             for (int m = 0; m < ModifierCount; m++)
             {
-                int saved = PlayerPrefs.GetInt(JudgeKey(j, m), DefaultModifierIndices[j, m]);
-                SetJudgeModifierIndex(j, m, saved); // también corrige índices fuera de rango
+                SetJudgeValue(j, m, PlayerPrefs.GetInt(JudgeKey(j, m), DefaultValues[j, m]));
             }
         }
     }
@@ -122,5 +116,6 @@ public class GameManager : MonoBehaviour
 
     private static string PlayerKey(PartType part) => "GM_Player_" + part;
 
-    private static string JudgeKey(int judge, int modifier) => "GM_Judge_" + judge + "_M" + (modifier + 1);
+    // Nombre nuevo (_Value) para no chocar con lo guardado en versiones anteriores
+    private static string JudgeKey(int judge, int modifier) => "GM_Judge_" + judge + "_M" + (modifier + 1) + "_Value";
 }

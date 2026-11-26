@@ -14,7 +14,7 @@ public class CustomizationManager : MonoBehaviour
         public TMP_Text roleLabel;
         [Tooltip("Tamaño 2: M1 y M2")]
         public Slider[] sliders;
-        [Tooltip("Opcional, tamaño 2: muestra el tag elegido de M1 y M2")]
+        [Tooltip("Opcional, tamaño 2: muestra el valor (1 a 5) de M1 y M2")]
         public TMP_Text[] valueLabels;
     }
 
@@ -43,6 +43,16 @@ public class CustomizationManager : MonoBehaviour
 
     [Header("Jueces: una tarjeta por juez (tamaño 3)")]
     [SerializeField] private JudgeCard[] judgeCards;
+    [Tooltip("Desactivado: el texto del rol se queda como lo escribiste en el Inspector. " +
+             "Activado: el script lo reemplaza con los roles dummy del GameManager.")]
+    [SerializeField] private bool overwriteRoleText = false;
+
+    [Header("Marcas de los sliders (una por cada opción)")]
+    [Tooltip("Opcional: sprite de la marca. Si se deja vacío, usa un cuadrado de color")]
+    [SerializeField] private Sprite tickSprite;
+    [SerializeField] private Color tickColor = new Color(0.15f, 0.15f, 0.15f, 1f);
+    [Tooltip("Ancho y alto de cada marca en pixeles")]
+    [SerializeField] private Vector2 tickSize = new Vector2(6f, 24f);
 
     [Header("Colores de pestañas")]
     [SerializeField] private Color selectedTabColor = Color.white;
@@ -175,7 +185,7 @@ public class CustomizationManager : MonoBehaviour
             JudgeCard card = judgeCards[j];
             if (card == null) continue;
 
-            if (card.roleLabel != null) card.roleLabel.text = gm.GetJudgeRole(j);
+            if (overwriteRoleText && card.roleLabel != null) card.roleLabel.text = gm.GetJudgeRole(j);
             if (card.sliders == null) continue;
 
             int sliderCount = Mathf.Min(card.sliders.Length, GameManager.ModifierCount);
@@ -187,22 +197,68 @@ public class CustomizationManager : MonoBehaviour
 
                 int judge = j; // copias locales para el listener
                 int modifier = m;
+                int options = GameManager.MaxValue - GameManager.MinValue + 1;
 
-                // Un punto del slider por cada tag definido
+                // El slider solo se detiene en números enteros: del 1 (más bajo) al 5
                 slider.wholeNumbers = true;
-                slider.minValue = 0;
-                slider.maxValue = gm.GetModifierOptions(m).Length - 1;
-                slider.SetValueWithoutNotify(gm.GetJudgeModifierIndex(j, m));
+                slider.minValue = GameManager.MinValue;
+                slider.maxValue = GameManager.MaxValue;
+                slider.SetValueWithoutNotify(gm.GetJudgeValue(j, m));
                 slider.onValueChanged.AddListener(value => OnModifierChanged(judge, modifier, Mathf.RoundToInt(value)));
 
+                BuildTicks(slider, options);
                 RefreshModifierLabel(judge, modifier);
             }
         }
     }
 
-    private void OnModifierChanged(int judge, int modifier, int index)
+    // Dibuja una marca por cada opción, repartidas a lo largo del slider
+    private void BuildTicks(Slider slider, int count)
     {
-        gm.SetJudgeModifierIndex(judge, modifier, index);
+        // Las marcas van dentro de "Handle Slide Area" para que coincidan exactamente con
+        // los puntos donde se detiene el handle. Se colocan primero para quedar detrás de él.
+        RectTransform parent = slider.handleRect != null
+            ? slider.handleRect.parent as RectTransform
+            : slider.GetComponent<RectTransform>();
+
+        if (parent == null) return;
+
+        // Limpia marcas anteriores (por si la escena se reinicia)
+        for (int i = parent.childCount - 1; i >= 0; i--)
+        {
+            Transform child = parent.GetChild(i);
+            if (child.name.StartsWith("Tick_"))
+            {
+                child.gameObject.SetActive(false);
+                Destroy(child.gameObject);
+            }
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            float t = count > 1 ? (float)i / (count - 1) : 0.5f;
+
+            GameObject tick = new GameObject("Tick_" + i, typeof(RectTransform), typeof(Image));
+            RectTransform rect = tick.GetComponent<RectTransform>();
+            rect.SetParent(parent, false);
+            rect.SetSiblingIndex(i); // detrás del handle
+
+            rect.anchorMin = new Vector2(t, 0.5f);
+            rect.anchorMax = new Vector2(t, 0.5f);
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.sizeDelta = tickSize;
+            rect.anchoredPosition = Vector2.zero;
+
+            Image image = tick.GetComponent<Image>();
+            image.sprite = tickSprite;
+            image.color = tickColor;
+            image.raycastTarget = false; // no estorba al arrastrar el slider
+        }
+    }
+
+    private void OnModifierChanged(int judge, int modifier, int value)
+    {
+        gm.SetJudgeValue(judge, modifier, value);
         gm.Save();
 
         RefreshModifierLabel(judge, modifier);
@@ -214,7 +270,7 @@ public class CustomizationManager : MonoBehaviour
 
         if (card.valueLabels != null && modifier < card.valueLabels.Length && card.valueLabels[modifier] != null)
         {
-            card.valueLabels[modifier].text = gm.GetJudgeTag(judge, modifier);
+            card.valueLabels[modifier].text = gm.GetJudgeValue(judge, modifier).ToString();
         }
     }
 
