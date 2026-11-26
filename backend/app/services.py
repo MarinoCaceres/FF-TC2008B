@@ -86,7 +86,10 @@ class SharkTankFlow(Flow[SessionState]):
                 self.state.statuses[shark.name] = out.type
                 self.state.attitudes[shark.name] = out.attitude
                 self.state.responses.append(
-                    SharkResponse(shark=shark.name, type=out.type, content=out.message, attitude=out.attitude)
+                    SharkResponse(
+                        shark=shark.name, type=out.type, content=out.message, attitude=out.attitude,
+                        hint=out.hint if out.type == "question" else None,
+                    )
                 )
                 logger.info("%s respondió (%s, actitud %d)", shark.name, out.type, out.attitude)
             elif shark.name in self.state.denied:
@@ -141,6 +144,8 @@ Siempre debes enviar un texto en "message" junto con el tipo de respuesta. Elige
 - type "in": haces una oferta. En "message" indica el monto, el porcentaje de la empresa que pides y por qué.
 
 Además llena:
+- hint: SOLO si type es "question": una pista de máximo 2 oraciones que oriente al usuario sobre qué
+  esperas oír como respuesta (por ejemplo qué dato o cifra te convencería). En "out" e "in" déjalo en null.
 - attitude: entero de -3 (lo detestas) a 3 (te encanta) sobre el pitch.
 - summary: frase de máximo 12 palabras, en tercera persona, que resuma tu postura
   para los otros tiburones (sin saludos ni relleno).

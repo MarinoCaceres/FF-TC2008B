@@ -51,6 +51,11 @@ class SharkOutput(BaseModel):
         "Ej: 'No le convence el impacto ambiental'"
     )
     attitude: int = Field(ge=-3, le=3, description="Actitud hacia el pitch: -3 lo detesta, 0 neutral, 3 le encanta")
+    hint: str | None = Field(
+        default=None,
+        description="Solo si type=question: pista corta (máx. 2 oraciones) que ayuda al usuario a contestar "
+        "y dice qué espera oír el tiburón. Sin pista (null) en los demás tipos",
+    )
 
 
 class SharkResponse(BaseModel):
@@ -58,6 +63,7 @@ class SharkResponse(BaseModel):
     type: Literal["out", "question", "in"]
     content: str
     attitude: int
+    hint: str | None = None  # solo en preguntas: guía breve para que el usuario sepa qué responder
 
 
 SharkStatus = Literal["pending", "question", "in", "out"]  # pending = aún no responde; out es definitivo
