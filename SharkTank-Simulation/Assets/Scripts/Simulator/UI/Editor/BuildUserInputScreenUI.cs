@@ -17,6 +17,7 @@ namespace SharkTank.UI.Editor
         private const string CanvasName = "Canvas";
         private const string UserInputRootName = "UserInput";
         private const string ControllerObjectName = "UserInputScreenController";
+        private const string SampleJudgeQuestion = "¿Cuáles son tus objetivos principales con este proyecto?";
         private static readonly Vector2 ReferenceResolution = new Vector2(1920f, 1080f);
         private static readonly string[] JudgeCameraPoseNames =
         {
@@ -47,6 +48,7 @@ namespace SharkTank.UI.Editor
             Transform existingUserInput = canvas.transform.Find(UserInputRootName);
             GameObject userInputRoot;
             TMP_Text taskText;
+            TMP_Text questionText;
             TMP_InputField inputField;
             TMP_Text placeholder;
             Button enterButton;
@@ -54,9 +56,23 @@ namespace SharkTank.UI.Editor
             {
                 userInputRoot = existingUserInput.gameObject;
                 taskText = FindComponent<TMP_Text>(existingUserInput, "TaskPanel/CurrentTaskLabel");
+                questionText = FindComponent<TMP_Text>(existingUserInput, "QuestionLabel");
                 inputField = FindComponent<TMP_InputField>(existingUserInput, "BottomPanel/ResponseInputField");
                 placeholder = FindComponent<TMP_Text>(existingUserInput, "BottomPanel/ResponseInputField/Viewport/Placeholder");
                 enterButton = FindComponent<Button>(existingUserInput, "BottomPanel/EnterButton");
+                if (questionText == null)
+                {
+                    questionText = BuildQuestionLabel(userInputRoot.transform, defaultFont);
+                }
+                else
+                {
+                    if (string.IsNullOrWhiteSpace(questionText.text))
+                    {
+                        questionText.text = SampleJudgeQuestion;
+                    }
+
+                    questionText.gameObject.SetActive(true);
+                }
             }
             else
             {
@@ -73,6 +89,7 @@ namespace SharkTank.UI.Editor
                 Sprite roundedSprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Background.psd");
                 taskText = BuildTaskPanel(userInputRoot.transform, defaultFont, roundedSprite);
                 BuildBottomPanel(userInputRoot.transform, defaultFont, roundedSprite, out inputField, out placeholder, out enterButton);
+                questionText = BuildQuestionLabel(userInputRoot.transform, defaultFont);
             }
 
             CanvasGroup rootGroup = userInputRoot.GetComponent<CanvasGroup>();
@@ -80,6 +97,7 @@ namespace SharkTank.UI.Editor
             {
                 rootGroup = Undo.AddComponent<CanvasGroup>(userInputRoot);
             }
+            rootGroup.alpha = 1f;
 
             RectTransform bottomPanel = userInputRoot.transform.Find("BottomPanel") as RectTransform;
             UserInputScreen oldScreen = userInputRoot.GetComponent<UserInputScreen>();
@@ -88,6 +106,7 @@ namespace SharkTank.UI.Editor
             SerializedObject serializedScreen = new SerializedObject(screen);
             serializedScreen.FindProperty("rootGroup").objectReferenceValue = rootGroup;
             serializedScreen.FindProperty("currentTaskLabel").objectReferenceValue = taskText;
+            serializedScreen.FindProperty("questionTextLabel").objectReferenceValue = questionText;
             serializedScreen.FindProperty("inputField").objectReferenceValue = inputField;
             serializedScreen.FindProperty("placeholderLabel").objectReferenceValue = placeholder;
             serializedScreen.FindProperty("enterButton").objectReferenceValue = enterButton;
@@ -98,13 +117,12 @@ namespace SharkTank.UI.Editor
             AssignJudgeSequenceCameraController(activeScene, screen);
             EditorSceneManager.MarkSceneDirty(activeScene);
 
-            Transform inputFieldTransform = userInputRoot.transform.Find("BottomPanel/ResponseInputField");
-            GameObject selectionTarget = inputFieldTransform != null
-                ? inputFieldTransform.gameObject
+            GameObject selectionTarget = questionText != null
+                ? questionText.gameObject
                 : userInputRoot;
             Selection.activeGameObject = selectionTarget;
             EditorGUIUtility.PingObject(selectionTarget);
-            Debug.Log("UserInput stays under Canvas; its UserInputScreenController is managed separately outside Canvas.");
+            Debug.Log("The judge response UI preview is visible. Edit QuestionLabel under Canvas/UserInput to customize its text and appearance.");
         }
 
         private static UserInputScreen GetOrCreateController(
@@ -274,6 +292,18 @@ namespace SharkTank.UI.Editor
                 new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(0f, 0f), new Vector2(22f, 14f), new Vector2(-44f, -42f));
             taskText.textWrappingMode = TextWrappingModes.Normal;
             return taskText;
+        }
+
+        private static TMP_Text BuildQuestionLabel(Transform parent, TMP_FontAsset font)
+        {
+            TMP_Text questionText = CreateText("QuestionLabel", parent, font, SampleJudgeQuestion, 34f, Color.white,
+                TextAlignmentOptions.Center, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
+                new Vector2(0f, 278f), new Vector2(1580f, 110f));
+            questionText.fontStyle = FontStyles.Bold;
+            questionText.outlineColor = Color.black;
+            questionText.outlineWidth = 0.25f;
+            questionText.gameObject.SetActive(true);
+            return questionText;
         }
 
         private static void BuildBottomPanel(Transform parent, TMP_FontAsset font, Sprite roundedSprite,

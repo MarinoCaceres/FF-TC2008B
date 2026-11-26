@@ -9,6 +9,24 @@ namespace SharkTank.Simulator
     /// </summary>
     public sealed class SimulatorController : MonoBehaviour
     {
+        private sealed class TestJudgeQuestion
+        {
+            public readonly string judgeName;
+            public readonly string question;
+
+            public TestJudgeQuestion(string judgeName, string question)
+            {
+                this.judgeName = judgeName;
+                this.question = question;
+            }
+        }
+
+        private static readonly TestJudgeQuestion[] TestQuestions =
+        {
+            new TestJudgeQuestion("Juez de Marketing", "¿Cuáles son tus objetivos principales con este proyecto?"),
+            new TestJudgeQuestion("Juez de Finanzas", "¿Cómo planeas financiar el crecimiento de tu empresa?")
+        };
+
         private enum TestStage
         {
             Idle,
@@ -26,6 +44,7 @@ namespace SharkTank.Simulator
         [SerializeField] private JudgeFeedbackSequence judgeFeedbackSequence;
 
         private TestStage currentStage;
+        private int currentQuestionIndex;
         private Coroutine responseCoroutine;
 
         private void OnEnable()
@@ -90,14 +109,27 @@ namespace SharkTank.Simulator
             }
 
             currentStage = TestStage.PitchInput;
+            currentQuestionIndex = 0;
             Debug.Log("Simulator test started. Enter a pitch to begin.", this);
             ShowCurrentPrompt();
         }
 
         private void HandleResponseSubmitted(string response)
         {
-            bool isPitchRound = currentStage == TestStage.PitchInput;
-            if (!isPitchRound && currentStage != TestStage.AnswerInput)
+            if (currentStage == TestStage.AnswerInput)
+            {
+                if (judgeFeedbackSequence.IsPlaying)
+                {
+                    Debug.LogWarning("The response was not processed because judge feedback is already playing.", this);
+                    return;
+                }
+
+                userInputScreen.SetInteractable(false);
+                responseCoroutine = StartCoroutine(HideQuestionAndContinue(response));
+                return;
+            }
+
+            if (currentStage != TestStage.PitchInput)
             {
                 return;
             }
@@ -108,9 +140,32 @@ namespace SharkTank.Simulator
                 return;
             }
 
-            currentStage = isPitchRound ? TestStage.PitchFeedback : TestStage.AnswerFeedback;
+            currentStage = TestStage.PitchFeedback;
             userInputScreen.SetInteractable(false);
-            responseCoroutine = StartCoroutine(HideInputAndPlayFeedback(response, isPitchRound));
+            responseCoroutine = StartCoroutine(HideInputAndPlayFeedback(response, true));
+        }
+
+        private IEnumerator HideQuestionAndContinue(string response)
+        {
+            TestJudgeQuestion answeredQuestion = TestQuestions[currentQuestionIndex];
+            yield return userInputScreen.HideAndWait(false);
+            responseCoroutine = null;
+            Debug.Log("Respuesta de " + answeredQuestion.judgeName + ": " + response, this);
+
+            currentQuestionIndex++;
+            if (currentQuestionIndex < TestQuestions.Length)
+            {
+                ShowCurrentPrompt();
+                yield break;
+            }
+
+            currentStage = TestStage.AnswerFeedback;
+            if (!judgeFeedbackSequence.Play(CreateTestFeedback(false), false))
+            {
+                currentStage = TestStage.AnswerInput;
+                currentQuestionIndex = TestQuestions.Length - 1;
+                ShowCurrentPrompt();
+            }
         }
 
         private IEnumerator HideInputAndPlayFeedback(string response, bool isPitchRound)
@@ -134,7 +189,8 @@ namespace SharkTank.Simulator
             {
                 case TestStage.PitchFeedback:
                     currentStage = TestStage.AnswerInput;
-                    Debug.Log("La retroalimentación del pitch terminó. Escribe tu respuesta para continuar.", this);
+                    currentQuestionIndex = 0;
+                    Debug.Log("La retroalimentación del pitch terminó. Responde las preguntas de los jueces.", this);
                     ShowCurrentPrompt();
                     break;
 
@@ -157,7 +213,18 @@ namespace SharkTank.Simulator
                     break;
 
                 case TestStage.AnswerInput:
-                    userInputScreen.Show("Responde a las dudas de los jueces.", "Escribe tu respuesta aquí...");
+                    if (currentQuestionIndex >= 0 && currentQuestionIndex < TestQuestions.Length)
+                    {
+                        TestJudgeQuestion question = TestQuestions[currentQuestionIndex];
+                        userInputScreen.Show(
+                            "Responde la duda del juez: " + question.judgeName,
+                            "Escribe tu respuesta aquí...",
+                            question.question);
+                    }
+                    else
+                    {
+                        Debug.LogWarning("SimulatorController has no test question to show for the current index.", this);
+                    }
                     break;
 
                 default:

@@ -25,6 +25,8 @@ namespace SharkTank.UI
         [SerializeField] private CanvasGroup rootGroup;
         [Tooltip("Text describing the current task.")]
         [SerializeField] private TMP_Text currentTaskLabel;
+        [Tooltip("Question the user is currently answering.")]
+        [SerializeField] private TMP_Text questionTextLabel;
         [Tooltip("Multiline field for the user's response.")]
         [SerializeField] private TMP_InputField inputField;
         [Tooltip("Placeholder shown while the response is empty.")]
@@ -64,6 +66,9 @@ namespace SharkTank.UI
         [SerializeField] private float judgeVerticalPanCycleDuration = 4.5f;
 
         private Vector2 bottomPanelVisiblePosition;
+        private RectTransform taskPanel;
+        private float taskPanelMinimumHeight;
+        private float taskLabelVerticalPadding;
         private Coroutine transitionCoroutine;
         private Coroutine cameraTransitionCoroutine;
         private Vector3 previousCameraPosition;
@@ -94,6 +99,13 @@ namespace SharkTank.UI
                 rootGroup.blocksRaycasts = false;
             }
 
+            EnsureQuestionTextLabel();
+            if (questionTextLabel != null)
+            {
+                questionTextLabel.text = string.Empty;
+                questionTextLabel.gameObject.SetActive(false);
+            }
+
             if (inputField != null)
             {
                 inputField.characterLimit = 800;
@@ -119,6 +131,17 @@ namespace SharkTank.UI
                 bottomPanelVisiblePosition = bottomPanel.anchoredPosition;
             }
 
+            if (currentTaskLabel != null)
+            {
+                taskPanel = currentTaskLabel.transform.parent as RectTransform;
+                if (taskPanel != null)
+                {
+                    taskPanelMinimumHeight = taskPanel.sizeDelta.y;
+                    RectTransform taskLabelRect = currentTaskLabel.rectTransform;
+                    taskLabelVerticalPadding = taskLabelRect.offsetMin.y - taskLabelRect.offsetMax.y;
+                }
+            }
+
             canInteract = false;
             UpdateEnterButton();
         }
@@ -141,11 +164,19 @@ namespace SharkTank.UI
         /// </summary>
         /// <param name="taskText">The task shown above the response field.</param>
         /// <param name="placeholderText">The hint shown in the empty response field.</param>
-        public void Show(string taskText, string placeholderText)
+        /// <param name="questionText">The question shown above the response field.</param>
+        public void Show(string taskText, string placeholderText, string questionText = null)
         {
             if (currentTaskLabel != null)
             {
                 currentTaskLabel.text = taskText ?? string.Empty;
+                ResizeTaskPanelToFitText();
+            }
+
+            if (questionTextLabel != null)
+            {
+                questionTextLabel.text = questionText ?? string.Empty;
+                questionTextLabel.gameObject.SetActive(!string.IsNullOrWhiteSpace(questionText));
             }
 
             if (placeholderLabel != null)
@@ -184,6 +215,65 @@ namespace SharkTank.UI
 
             MoveCameraToInputPose();
             StartTransition(true);
+        }
+
+        private void ResizeTaskPanelToFitText()
+        {
+            if (taskPanel == null || currentTaskLabel == null)
+            {
+                return;
+            }
+
+            RectTransform taskLabelRect = currentTaskLabel.rectTransform;
+            float labelWidth = taskLabelRect.rect.width;
+            if (labelWidth <= 0f)
+            {
+                return;
+            }
+
+            float preferredHeight = currentTaskLabel.GetPreferredValues(currentTaskLabel.text, labelWidth, 0f).y;
+            Vector2 panelSize = taskPanel.sizeDelta;
+            panelSize.y = Mathf.Max(taskPanelMinimumHeight, preferredHeight + taskLabelVerticalPadding);
+            taskPanel.sizeDelta = panelSize;
+        }
+
+        private void EnsureQuestionTextLabel()
+        {
+            if (questionTextLabel != null || rootGroup == null)
+            {
+                return;
+            }
+
+            Transform existingLabel = rootGroup.transform.Find("QuestionLabel");
+            if (existingLabel != null)
+            {
+                questionTextLabel = existingLabel.GetComponent<TMP_Text>();
+                if (questionTextLabel != null)
+                {
+                    return;
+                }
+            }
+
+            GameObject labelObject = new GameObject("QuestionLabel", typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI));
+            labelObject.transform.SetParent(rootGroup.transform, false);
+
+            RectTransform labelRect = labelObject.GetComponent<RectTransform>();
+            labelRect.anchorMin = new Vector2(0.5f, 0f);
+            labelRect.anchorMax = new Vector2(0.5f, 0f);
+            labelRect.pivot = new Vector2(0.5f, 0f);
+            labelRect.anchoredPosition = new Vector2(0f, 278f);
+            labelRect.sizeDelta = new Vector2(1580f, 110f);
+
+            questionTextLabel = labelObject.GetComponent<TextMeshProUGUI>();
+            questionTextLabel.font = currentTaskLabel != null ? currentTaskLabel.font : TMP_Settings.defaultFontAsset;
+            questionTextLabel.fontSize = 34f;
+            questionTextLabel.fontStyle = FontStyles.Bold;
+            questionTextLabel.color = Color.white;
+            questionTextLabel.alignment = TextAlignmentOptions.Center;
+            questionTextLabel.textWrappingMode = TextWrappingModes.Normal;
+            questionTextLabel.outlineColor = Color.black;
+            questionTextLabel.outlineWidth = 0.25f;
+            questionTextLabel.raycastTarget = false;
         }
 
         /// <summary>
