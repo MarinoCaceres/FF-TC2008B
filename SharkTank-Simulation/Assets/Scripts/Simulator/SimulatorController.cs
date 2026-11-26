@@ -9,31 +9,13 @@ namespace SharkTank.Simulator
     /// </summary>
     public sealed class SimulatorController : MonoBehaviour
     {
-        private sealed class TestJudgeQuestion
-        {
-            public readonly string judgeName;
-            public readonly string question;
-
-            public TestJudgeQuestion(string judgeName, string question)
-            {
-                this.judgeName = judgeName;
-                this.question = question;
-            }
-        }
-
-        private static readonly TestJudgeQuestion[] TestQuestions =
-        {
-            new TestJudgeQuestion("Juez de Marketing", "¿Cuáles son tus objetivos principales con este proyecto?"),
-            new TestJudgeQuestion("Juez de Finanzas", "¿Cómo planeas financiar el crecimiento de tu empresa?")
-        };
-
         private enum TestStage
         {
             Idle,
             PitchInput,
             PitchFeedback,
+            DecisionRound,
             AnswerInput,
-            AnswerFeedback,
             Complete
         }
 
@@ -42,10 +24,27 @@ namespace SharkTank.Simulator
         [SerializeField] private UserInputScreen userInputScreen;
         [Tooltip("Existing judge feedback sequence.")]
         [SerializeField] private JudgeFeedbackSequence judgeFeedbackSequence;
+        [Tooltip("Manages the background music for player and judge turns.")]
+        [SerializeField] private BGMManager bgmManager;
 
         private TestStage currentStage;
-        private int currentQuestionIndex;
+        private TestStage questionReturnStage;
         private Coroutine responseCoroutine;
+        private string currentQuestionJudgeName;
+        private int decisionRoundIndex;
+
+        private void Awake()
+        {
+            if (bgmManager == null)
+            {
+                bgmManager = GetComponent<BGMManager>();
+            }
+
+            if (bgmManager == null)
+            {
+                Debug.LogWarning("SimulatorController is missing its BGMManager reference.", this);
+            }
+        }
 
         private void OnEnable()
         {
@@ -59,6 +58,10 @@ namespace SharkTank.Simulator
             {
                 judgeFeedbackSequence.OnFeedbackFinished -= HandleFeedbackFinished;
                 judgeFeedbackSequence.OnFeedbackFinished += HandleFeedbackFinished;
+                judgeFeedbackSequence.OnJudgeQuestionAsked -= HandleJudgeQuestionAsked;
+                judgeFeedbackSequence.OnJudgeQuestionAsked += HandleJudgeQuestionAsked;
+                judgeFeedbackSequence.OnJudgeSpeakingStarted -= HandleJudgeSpeakingStarted;
+                judgeFeedbackSequence.OnJudgeSpeakingStarted += HandleJudgeSpeakingStarted;
             }
         }
 
@@ -72,6 +75,8 @@ namespace SharkTank.Simulator
             if (judgeFeedbackSequence != null)
             {
                 judgeFeedbackSequence.OnFeedbackFinished -= HandleFeedbackFinished;
+                judgeFeedbackSequence.OnJudgeQuestionAsked -= HandleJudgeQuestionAsked;
+                judgeFeedbackSequence.OnJudgeSpeakingStarted -= HandleJudgeSpeakingStarted;
             }
 
             if (responseCoroutine != null)
@@ -108,22 +113,26 @@ namespace SharkTank.Simulator
                 return;
             }
 
+            bgmManager?.PlayPlayerTrack();
             currentStage = TestStage.PitchInput;
-            currentQuestionIndex = 0;
             Debug.Log("Simulator test started. Enter a pitch to begin.", this);
-            ShowCurrentPrompt();
+            userInputScreen.Show(
+                "Presenta tu pitch ante los jueces.",
+                "Escribe tu pitch aquí...",
+                questionHint: UserInputScreen.PitchHelpHint);
         }
 
         private void HandleResponseSubmitted(string response)
         {
             if (currentStage == TestStage.AnswerInput)
             {
-                if (judgeFeedbackSequence.IsPlaying)
+                if (!judgeFeedbackSequence.IsWaitingForQuestionResponse)
                 {
-                    Debug.LogWarning("The response was not processed because judge feedback is already playing.", this);
+                    Debug.LogWarning("The response was not processed because no judge question is awaiting an answer.", this);
                     return;
                 }
 
+                bgmManager?.PlayJudgeTrack();
                 userInputScreen.SetInteractable(false);
                 responseCoroutine = StartCoroutine(HideQuestionAndContinue(response));
                 return;
@@ -140,47 +149,40 @@ namespace SharkTank.Simulator
                 return;
             }
 
+            bgmManager?.PlayJudgeTrack();
             currentStage = TestStage.PitchFeedback;
             userInputScreen.SetInteractable(false);
-            responseCoroutine = StartCoroutine(HideInputAndPlayFeedback(response, true));
+            responseCoroutine = StartCoroutine(HideInputAndPlayFeedback(response));
         }
 
         private IEnumerator HideQuestionAndContinue(string response)
         {
-            TestJudgeQuestion answeredQuestion = TestQuestions[currentQuestionIndex];
             yield return userInputScreen.HideAndWait(false);
             responseCoroutine = null;
-            Debug.Log("Respuesta de " + answeredQuestion.judgeName + ": " + response, this);
+            Debug.Log("Respuesta de " + currentQuestionJudgeName + ": " + response, this);
 
-            currentQuestionIndex++;
-            if (currentQuestionIndex < TestQuestions.Length)
-            {
-                ShowCurrentPrompt();
-                yield break;
-            }
-
-            currentStage = TestStage.AnswerFeedback;
-            if (!judgeFeedbackSequence.Play(CreateTestFeedback(false), false))
-            {
-                currentStage = TestStage.AnswerInput;
-                currentQuestionIndex = TestQuestions.Length - 1;
-                ShowCurrentPrompt();
-            }
+            userInputScreen.ClearQuestionJudgeCamera();
+            currentStage = questionReturnStage;
+            judgeFeedbackSequence.CompleteQuestionResponse();
         }
 
-        private IEnumerator HideInputAndPlayFeedback(string response, bool isPitchRound)
+        private IEnumerator HideInputAndPlayFeedback(string response)
         {
             yield return userInputScreen.HideAndWait(false);
             responseCoroutine = null;
 
-            if (!judgeFeedbackSequence.Play(CreateTestFeedback(isPitchRound), isPitchRound))
+            if (!judgeFeedbackSequence.Play(CreateTestFeedback(true), true, false))
             {
-                currentStage = isPitchRound ? TestStage.PitchInput : TestStage.AnswerInput;
-                ShowCurrentPrompt();
+                bgmManager?.PlayPlayerTrack();
+                currentStage = TestStage.PitchInput;
+                userInputScreen.Show(
+                    "Presenta tu pitch ante los jueces.",
+                    "Escribe tu pitch aquí...",
+                    questionHint: UserInputScreen.PitchHelpHint);
                 yield break;
             }
 
-            Debug.Log((isPitchRound ? "Pitch" : "Respuesta") + " recibida: " + response, this);
+            Debug.Log("Pitch recibido: " + response, this);
         }
 
         private void HandleFeedbackFinished()
@@ -188,15 +190,30 @@ namespace SharkTank.Simulator
             switch (currentStage)
             {
                 case TestStage.PitchFeedback:
-                    currentStage = TestStage.AnswerInput;
-                    currentQuestionIndex = 0;
-                    Debug.Log("La retroalimentación del pitch terminó. Responde las preguntas de los jueces.", this);
-                    ShowCurrentPrompt();
+                    currentStage = TestStage.DecisionRound;
+                    decisionRoundIndex = 0;
+                    Debug.Log("La ronda de preguntas terminó. Los jueces tomarán sus decisiones.", this);
+                    if (!judgeFeedbackSequence.Play(CreateTestFeedback(false, decisionRoundIndex), false, true))
+                    {
+                        currentStage = TestStage.Idle;
+                        Debug.LogWarning("The first decision round could not start; the simulation was not completed.", this);
+                    }
                     break;
 
-                case TestStage.AnswerFeedback:
-                    currentStage = TestStage.Complete;
-                    Debug.Log("La prueba de flujo entre jugador y jueces terminó.", this);
+                case TestStage.DecisionRound:
+                    if (judgeFeedbackSequence.AreAllJudgesDecided)
+                    {
+                        currentStage = TestStage.Complete;
+                        Debug.Log("Todos los jueces hicieron una oferta o están fuera. La prueba terminó.", this);
+                        break;
+                    }
+
+                    decisionRoundIndex++;
+                    if (!judgeFeedbackSequence.Play(CreateTestFeedback(false, decisionRoundIndex), false, true))
+                    {
+                        currentStage = TestStage.Idle;
+                        Debug.LogWarning("The next decision round could not start; not all judges have made a decision.", this);
+                    }
                     break;
 
                 default:
@@ -204,33 +221,29 @@ namespace SharkTank.Simulator
             }
         }
 
-        private void ShowCurrentPrompt()
+        private void HandleJudgeQuestionAsked(int judgeIndex, string judgeName, string question, string hint)
         {
-            switch (currentStage)
+            if (currentStage != TestStage.PitchFeedback && currentStage != TestStage.DecisionRound)
             {
-                case TestStage.PitchInput:
-                    userInputScreen.Show("Presenta tu pitch ante los jueces.", "Escribe tu pitch aquí...");
-                    break;
-
-                case TestStage.AnswerInput:
-                    if (currentQuestionIndex >= 0 && currentQuestionIndex < TestQuestions.Length)
-                    {
-                        TestJudgeQuestion question = TestQuestions[currentQuestionIndex];
-                        userInputScreen.Show(
-                            "Responde la duda del juez: " + question.judgeName,
-                            "Escribe tu respuesta aquí...",
-                            question.question);
-                    }
-                    else
-                    {
-                        Debug.LogWarning("SimulatorController has no test question to show for the current index.", this);
-                    }
-                    break;
-
-                default:
-                    Debug.LogWarning("SimulatorController cannot show input for the current test stage.", this);
-                    break;
+                Debug.LogWarning("SimulatorController received a judge question outside a judge feedback round.", this);
+                return;
             }
+
+            questionReturnStage = currentStage;
+            currentStage = TestStage.AnswerInput;
+            currentQuestionJudgeName = judgeName;
+            bgmManager?.PlayPlayerTrack();
+            userInputScreen.SetQuestionJudgeCamera(judgeIndex);
+            userInputScreen.Show(
+                "Responde la duda del juez: " + judgeName,
+                "Escribe tu respuesta aquí...",
+                question,
+                hint);
+        }
+
+        private void HandleJudgeSpeakingStarted(int judgeIndex)
+        {
+            bgmManager?.PlayJudgeTrack();
         }
 
         private bool ValidateReferences()
@@ -251,7 +264,7 @@ namespace SharkTank.Simulator
             return isValid;
         }
 
-        private static JudgeFeedbackData[] CreateTestFeedback(bool isPitchRound)
+        private static JudgeFeedbackData[] CreateTestFeedback(bool isPitchRound, int decisionRoundIndex = 0)
         {
             if (isPitchRound)
             {
@@ -261,17 +274,46 @@ namespace SharkTank.Simulator
                         "Juez de Marketing",
                         2,
                         "Tu propuesta tiene una idea clara y un mercado atractivo.",
-                        "Explica con más detalle cómo conseguirás tus primeros clientes."),
+                        "Explica con más detalle cómo conseguirás tus primeros clientes.",
+                        question: "¿Cuáles son tus objetivos principales con este proyecto?",
+                        hint: "Explica qué problema quieres resolver, para quién y qué objetivos concretos te permitirán medir el avance."),
                     new JudgeFeedbackData(
                         "Juez de Finanzas",
                         -3,
                         "La presentación fue fácil de seguir.",
-                        "Los costos y las proyecciones todavía no justifican la inversión."),
+                        "Los costos y las proyecciones todavía no justifican la inversión.",
+                        question: "¿Cómo planeas financiar el crecimiento de tu empresa?",
+                        hint: "Comenta tus fuentes de capital, cuánto necesitas, en qué lo invertirás y cómo planeas sostener el crecimiento."),
                     new JudgeFeedbackData(
                         "Juez de Operaciones",
                         0,
                         "El producto resuelve una necesidad interesante.",
                         string.Empty)
+                };
+            }
+
+            if (decisionRoundIndex > 0)
+            {
+                return new[]
+                {
+                    new JudgeFeedbackData(
+                        "Juez de Marketing",
+                        1,
+                        "Tu respuesta aclara tus prioridades para el negocio.",
+                        string.Empty,
+                        offerText: "Te ofrezco invertir $150,000 por el 10% de tu empresa."),
+                    new JudgeFeedbackData(
+                        "Juez de Finanzas",
+                        1,
+                        "Tu respuesta reduce parte del riesgo financiero.",
+                        string.Empty,
+                        offerText: "Te ofrezco invertir $200,000 por el 12% de tu empresa."),
+                    new JudgeFeedbackData(
+                        "Juez de Operaciones",
+                        1,
+                        "Tu plan de ejecución ahora es más claro.",
+                        string.Empty,
+                        offerText: "Te ofrezco invertir $100,000 por el 8% de tu empresa.")
                 };
             }
 
@@ -281,17 +323,23 @@ namespace SharkTank.Simulator
                     "Juez de Marketing",
                     1,
                     "Tu respuesta identifica un canal claro para llegar a los clientes.",
-                    "Incluye cómo medirás si ese canal está funcionando."),
+                    "Explica cómo medirás si ese canal está funcionando.",
+                    question: "¿Qué resultado considerarías una señal de que debes cambiar de estrategia?",
+                    hint: "Menciona métricas verificables y el umbral que te haría mantener o cambiar de estrategia."),
                 new JudgeFeedbackData(
                     "Juez de Finanzas",
-                    -1,
-                    "La explicación de los costos fue más concreta.",
-                    "Aclara cuándo esperas recuperar la inversión."),
+                    -3,
+                    null,
+                    null,
+                    isOut: true,
+                    outText: "Estoy fuera; no haré una oferta en este proyecto.",
+                    outReason: "El riesgo financiero supera mi tolerancia, aunque la idea tenga potencial."),
                 new JudgeFeedbackData(
                     "Juez de Operaciones",
                     2,
-                    "El plan parece más fácil de poner en marcha.",
-                    string.Empty)
+                    "Tu respuesta ayuda a aclarar los riesgos de ejecución.",
+                    string.Empty,
+                    offerText: "Te ofrezco invertir $250,000 por el 15% de tu empresa.")
             };
         }
     }

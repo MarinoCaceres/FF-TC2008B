@@ -53,7 +53,7 @@ namespace SharkTank.UI
         [SerializeField] private float settledPause = 0.6f;
         [Tooltip("Pause on the judges' wide shot before their chairs move, in seconds.")]
         [SerializeField] private float judgesDecisionPause = 1f;
-        [Tooltip("Pause on the top-down judge overview before moving to the player, in seconds.")]
+        [Tooltip("Pause on the final top-down judge overview before moving to the player, in seconds.")]
         [SerializeField] private float topDownOverviewPause = 3f;
 
         [Header("Judge exits")]
@@ -67,13 +67,17 @@ namespace SharkTank.UI
         private bool chairsSettled;
         private bool arrowPressed;
         private bool continuePressed;
+        private bool questionAnswered;
+        private bool awaitingQuestionResponse;
         private readonly bool[] judgesOut = new bool[JudgeCount];
+        private readonly bool[] judgesHaveOffers = new bool[JudgeCount];
+        private readonly bool[] judgesAlreadyDecided = new bool[JudgeCount];
         private readonly JudgeFadeState[] judgeFadeStates = new JudgeFadeState[JudgeCount];
         private Vector3 judgesTopDownOverviewBasePosition;
         private bool hasCapturedTopDownOverviewPosition;
 
         /// <summary>
-        /// Occurs after CONTINUAR is pressed, the overview transition completes, and the speech UI has hidden.
+        /// Occurs after CONTINUAR is pressed and any applicable end-of-round camera transition completes.
         /// </summary>
         public event Action OnFeedbackFinished;
 
@@ -88,9 +92,48 @@ namespace SharkTank.UI
         public event Action<int, int> OnSpeechBoxShown;
 
         /// <summary>
+        /// Occurs when a judge asks a question that needs a player response.
+        /// </summary>
+        public event Action<int, string, string, string> OnJudgeQuestionAsked;
+
+        /// <summary>
+        /// Occurs when a judge presents an offer.
+        /// </summary>
+        public event Action<int> OnJudgeOfferPresented;
+
+        /// <summary>
+        /// Occurs when a judge says they are out.
+        /// </summary>
+        public event Action<int> OnJudgeOutPresented;
+
+        /// <summary>
         /// Gets whether a feedback sequence is currently running.
         /// </summary>
         public bool IsPlaying => sequenceCoroutine != null;
+
+        /// <summary>
+        /// Gets whether the sequence is waiting for the current judge's question response.
+        /// </summary>
+        public bool IsWaitingForQuestionResponse => awaitingQuestionResponse;
+
+        /// <summary>
+        /// Gets whether every judge has made an offer or is out.
+        /// </summary>
+        public bool AreAllJudgesDecided
+        {
+            get
+            {
+                for (int i = 0; i < JudgeCount; i++)
+                {
+                    if (!IsJudgeDecided(i))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
 
         private void Awake()
         {
@@ -132,6 +175,9 @@ namespace SharkTank.UI
                     RestoreJudgeModel(i);
                 }
             }
+
+            questionAnswered = false;
+            awaitingQuestionResponse = false;
         }
 
         /// <summary>
@@ -139,13 +185,19 @@ namespace SharkTank.UI
         /// </summary>
         /// <param name="feedback">Already-split feedback data in judge order.</param>
         /// <param name="isPitchRound">Whether the feedback follows the initial pitch.</param>
+        /// <param name="showTopDownOverview">Whether to show the final overview when all judges have made a decision.</param>
         /// <returns>True when the feedback sequence starts successfully.</returns>
-        public bool Play(IList<JudgeFeedbackData> feedback, bool isPitchRound)
+        public bool Play(IList<JudgeFeedbackData> feedback, bool isPitchRound, bool showTopDownOverview = true)
         {
             if (sequenceCoroutine != null)
             {
                 Debug.LogWarning("JudgeFeedbackSequence is already playing a feedback sequence.", this);
                 return false;
+            }
+
+            if (isPitchRound)
+            {
+                ResetJudgeDecisionStatus();
             }
 
             if (!ValidateInput(feedback) || !ValidateJudgeOutModels(feedback))
@@ -155,8 +207,23 @@ namespace SharkTank.UI
 
             arrowPressed = false;
             continuePressed = false;
-            sequenceCoroutine = StartCoroutine(RunSequence(feedback, isPitchRound));
+            sequenceCoroutine = StartCoroutine(RunSequence(feedback, isPitchRound, showTopDownOverview));
             return true;
+        }
+
+        /// <summary>
+        /// Resumes the sequence after the player has answered the current judge's question.
+        /// </summary>
+        public void CompleteQuestionResponse()
+        {
+            if (!awaitingQuestionResponse)
+            {
+                Debug.LogWarning("JudgeFeedbackSequence is not waiting for a question response.", this);
+                return;
+            }
+
+            questionAnswered = true;
+            awaitingQuestionResponse = false;
         }
 
         [ContextMenu("Test: Feedback Round 1")]
@@ -168,11 +235,17 @@ namespace SharkTank.UI
         [ContextMenu("Test: Judge 2 Is Out")]
         private void TestJudgeTwoIsOut()
         {
-            StartTestFeedback(true);
+            StartTestFeedback(judgeTwoIsOut: true);
         }
 
-        [ContextMenu("Test: Reset Judge Out Status")]
-        private void TestResetJudgeOutStatus()
+        [ContextMenu("Test: Judge 2 Makes an Offer")]
+        private void TestJudgeTwoMakesAnOffer()
+        {
+            StartTestFeedback(judgeTwoMakesOffer: true);
+        }
+
+        [ContextMenu("Test: Reset Judge Decision Status")]
+        private void TestResetJudgeDecisionStatus()
         {
             if (!Application.isPlaying)
             {
@@ -187,11 +260,7 @@ namespace SharkTank.UI
             }
 
             ResolveJudgeModelRoots();
-            for (int i = 0; i < JudgeCount; i++)
-            {
-                judgesOut[i] = false;
-                RestoreJudgeModel(i);
-            }
+            ResetJudgeDecisionStatus();
         }
 
         [ContextMenu("Test: Reset Chairs")]
@@ -231,7 +300,7 @@ namespace SharkTank.UI
             cameraController.CutCameraToPose(judgesTopDownOverviewPoint);
         }
 
-        private IEnumerator RunSequence(IList<JudgeFeedbackData> feedback, bool isPitchRound)
+        private IEnumerator RunSequence(IList<JudgeFeedbackData> feedback, bool isPitchRound, bool showTopDownOverview)
         {
             yield return speechUI.Hide();
 
@@ -245,11 +314,12 @@ namespace SharkTank.UI
             for (int i = 0; i < JudgeCount; i++)
             {
                 attitudes.Add(feedback[i].attitude);
+                judgesAlreadyDecided[i] = IsJudgeDecided(i);
             }
 
             chairsSettled = false;
             chairsController.OnChairsSettled += HandleChairsSettled;
-            chairsController.ApplyAttitudes(attitudes, judgesOut);
+            chairsController.ApplyAttitudes(attitudes, judgesAlreadyDecided);
             yield return new WaitUntil(() => chairsSettled);
             chairsController.OnChairsSettled -= HandleChairsSettled;
 
@@ -261,7 +331,7 @@ namespace SharkTank.UI
             bool showedJudgeSpeech = false;
             for (int judgeIndex = 0; judgeIndex < JudgeCount; judgeIndex++)
             {
-                if (judgesOut[judgeIndex])
+                if (IsJudgeDecided(judgeIndex))
                 {
                     continue;
                 }
@@ -291,6 +361,8 @@ namespace SharkTank.UI
                     ? string.IsNullOrWhiteSpace(judgeFeedback.outReason)
                         ? "El proyecto no se ajusta a lo que busco en una inversión."
                         : judgeFeedback.outReason
+                    : !string.IsNullOrWhiteSpace(judgeFeedback.offerText)
+                        ? judgeFeedback.offerText
                     : string.IsNullOrWhiteSpace(judgeFeedback.criticismText)
                         ? isPitchRound
                             ? "¡Presentaste muy bien tus ideas!"
@@ -299,19 +371,51 @@ namespace SharkTank.UI
 
                 speechUI.ShowText(judgeFeedback.judgeName, firstText);
                 OnSpeechBoxShown?.Invoke(judgeIndex, 0);
+                if (judgeFeedback.isOut)
+                {
+                    OnJudgeOutPresented?.Invoke(judgeIndex);
+                }
+
                 arrowPressed = false;
                 yield return new WaitUntil(() => arrowPressed);
 
                 speechUI.ShowText(judgeFeedback.judgeName, secondText);
                 OnSpeechBoxShown?.Invoke(judgeIndex, 1);
+                if (!judgeFeedback.isOut && !string.IsNullOrWhiteSpace(judgeFeedback.offerText))
+                {
+                    OnJudgeOfferPresented?.Invoke(judgeIndex);
+                }
+
                 arrowPressed = false;
                 yield return new WaitUntil(() => arrowPressed);
+
+                if (!string.IsNullOrWhiteSpace(judgeFeedback.question))
+                {
+                    yield return speechUI.Hide();
+                    questionAnswered = false;
+                    awaitingQuestionResponse = true;
+                    OnJudgeQuestionAsked?.Invoke(
+                        judgeIndex,
+                        judgeFeedback.judgeName,
+                        judgeFeedback.question,
+                        judgeFeedback.hint);
+                    yield return new WaitUntil(() => questionAnswered);
+
+                    if (judgeCameraPoint != null)
+                    {
+                        yield return cameraController.MoveCameraToPose(judgeCameraPoint, judgeFeedbackRightOffset);
+                    }
+                }
 
                 showedJudgeSpeech = true;
                 if (judgeFeedback.isOut && PrepareJudgeFadeState(judgeIndex))
                 {
                     yield return FadeOutJudgeModel(judgeIndex);
                     judgesOut[judgeIndex] = true;
+                }
+                else if (!string.IsNullOrWhiteSpace(judgeFeedback.offerText))
+                {
+                    judgesHaveOffers[judgeIndex] = true;
                 }
 
                 if (HasActiveJudgeAfter(judgeIndex))
@@ -328,14 +432,18 @@ namespace SharkTank.UI
             speechUI.ShowContinue();
             yield return new WaitUntil(() => continuePressed);
             yield return speechUI.Hide();
-            UpdateTopDownOverviewPosition();
-            cameraController.CutCameraToPose(judgesTopDownOverviewPoint);
-            if (topDownOverviewPause > 0f)
+            if (showTopDownOverview && AreAllJudgesDecided)
             {
-                yield return new WaitForSecondsRealtime(topDownOverviewPause);
+                UpdateTopDownOverviewPosition();
+                cameraController.CutCameraToPose(judgesTopDownOverviewPoint);
+                if (topDownOverviewPause > 0f)
+                {
+                    yield return new WaitForSecondsRealtime(topDownOverviewPause);
+                }
+
+                yield return cameraController.MoveCameraToPose(userInputCameraPose);
             }
 
-            yield return cameraController.MoveCameraToPose(userInputCameraPose);
             sequenceCoroutine = null;
             OnFeedbackFinished?.Invoke();
         }
@@ -679,13 +787,28 @@ namespace SharkTank.UI
         {
             for (int i = judgeIndex + 1; i < JudgeCount; i++)
             {
-                if (!judgesOut[i])
+                if (!IsJudgeDecided(i))
                 {
                     return true;
                 }
             }
 
             return false;
+        }
+
+        private bool IsJudgeDecided(int judgeIndex)
+        {
+            return judgesOut[judgeIndex] || judgesHaveOffers[judgeIndex];
+        }
+
+        private void ResetJudgeDecisionStatus()
+        {
+            for (int i = 0; i < JudgeCount; i++)
+            {
+                judgesOut[i] = false;
+                judgesHaveOffers[i] = false;
+                RestoreJudgeModel(i);
+            }
         }
 
         private static bool SupportsFade(Material material)
@@ -759,7 +882,7 @@ namespace SharkTank.UI
             return material.shader != null && material.shader.name == Urp2DMeshLitShaderName;
         }
 
-        private static List<JudgeFeedbackData> CreateTestFeedback(bool judgeTwoIsOut)
+        private static List<JudgeFeedbackData> CreateTestFeedback(bool judgeTwoIsOut = false, bool judgeTwoMakesOffer = false)
         {
             return new List<JudgeFeedbackData>
             {
@@ -775,7 +898,10 @@ namespace SharkTank.UI
                     "Los costos y las proyecciones todavía no justifican la inversión.",
                     isOut: judgeTwoIsOut,
                     outText: "Estoy fuera; no haré una oferta en este proyecto.",
-                    outReason: "El riesgo financiero supera mi tolerancia, aunque la idea tenga potencial."),
+                    outReason: "El riesgo financiero supera mi tolerancia, aunque la idea tenga potencial.",
+                    offerText: judgeTwoMakesOffer
+                        ? "Te ofrezco invertir $200,000 por el 12% de tu empresa."
+                        : null),
                 new JudgeFeedbackData(
                     "Juez de Operaciones",
                     0,
@@ -784,7 +910,7 @@ namespace SharkTank.UI
             };
         }
 
-        private void StartTestFeedback(bool judgeTwoIsOut)
+        private void StartTestFeedback(bool judgeTwoIsOut = false, bool judgeTwoMakesOffer = false)
         {
             if (!Application.isPlaying)
             {
@@ -794,7 +920,7 @@ namespace SharkTank.UI
 
             OnFeedbackFinished -= LogFeedbackFinished;
             OnFeedbackFinished += LogFeedbackFinished;
-            if (!Play(CreateTestFeedback(judgeTwoIsOut), true))
+            if (!Play(CreateTestFeedback(judgeTwoIsOut, judgeTwoMakesOffer), true))
             {
                 OnFeedbackFinished -= LogFeedbackFinished;
             }
