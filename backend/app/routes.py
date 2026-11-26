@@ -11,8 +11,9 @@ from app.schemas import (
     SessionMessages,
     SharkInfo,
     SharksOut,
+    SummaryOutput,
 )
-from app.services import InvalidRequest, handle_messages, start_session
+from app.services import InvalidRequest, handle_messages, start_session, summarize_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -49,6 +50,24 @@ async def send_messages(session_id: str, request: SessionMessages):
     except Exception as e:
         logger.exception("Error en la ronda de tiburones")
         raise HTTPException(status_code=500, detail=f"Error en la ronda de tiburones: {e}")
+
+
+@router.post(
+    "/session/{session_id}/summary",
+    response_model=SummaryOutput,
+    summary="Retroalimentación del coach sobre el desempeño del usuario en la sesión",
+)
+async def session_summary(session_id: str):
+    session = store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+    try:
+        return await summarize_session(session)
+    except InvalidRequest as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.exception("Error al generar el resumen")
+        raise HTTPException(status_code=500, detail=f"Error al generar el resumen: {e}")
 
 
 @router.delete("/session/{session_id}", summary="Terminar la sesión")

@@ -7,7 +7,7 @@ from crewai.flow.flow import Flow, FlowState, listen, start
 
 from app import session as store
 from app.config import MODEL_STRING, SharkConfig, load_sharks
-from app.schemas import ContextEntry, RoundOut, SharkOutput, SharkResponse, SharkSetup, SharkStatus, UserMessage
+from app.schemas import ContextEntry, RoundOut, SharkOutput, SharkResponse, SharkSetup, SharkStatus, SummaryOutput, UserMessage
 from app.session import ActiveShark, Session
 
 logger = logging.getLogger(__name__)
@@ -184,3 +184,62 @@ async def handle_messages(session: Session, messages: List[UserMessage]) -> Roun
         state.messages, state.addressed, state.denied, state.responses = passed, sorted(addressed), sorted(denied), []
         await session.flow.kickoff_async()
         return RoundOut(responses=list(state.responses), statuses=dict(state.statuses))
+
+
+def _render_transcript(session: Session) -> str:
+    """Full chat for the coach: unlike the sharks' pool, shark replies go in complete."""
+    lines = []
+    for e in session.flow.state.history:
+        if e.author == "Usuario":
+            lines.append(f"[Usuario → {e.recipient}]: {e.content}")
+        else:
+            lines.append(f"[{e.author}]: {e.content}")
+    outcome = ", ".join(f"{n}: {st}" for n, st in session.flow.state.statuses.items())
+    return "\n".join(lines) + f"\n\nPostura final de cada tiburón -> {outcome}"
+
+
+def build_coach() -> Agent:
+    return Agent(
+        role="Coach de pitches para emprendedores",
+        goal="Evaluar el desempeño del emprendedor en su pitch y darle consejos claros para mejorar.",
+        backstory=(
+            "Eres un coach experto que prepara emprendedores para presentar ante inversionistas. "
+            "Evalúas coherencia, formalidad, forma de abordar a los inversionistas y calidad del pitch. "
+            "Eres honesto y específico: citas ejemplos del chat y das consejos accionables, no generalidades. "
+            "Evalúas al EMPRENDEDOR (Usuario), no a los tiburones. Hablas siempre en español de México."
+        ),
+        allow_delegation=False,
+        llm=LLM(model=MODEL_STRING),
+    )
+
+
+async def summarize_session(session: Session) -> SummaryOutput:
+    """Have a coach agent read the session's shared chat and grade how the user did."""
+    async with session.lock:  # no leer a media ronda
+        if not any(e.author == "Usuario" for e in session.flow.state.history):
+            raise InvalidRequest("La sesión aún no tiene mensajes del usuario que evaluar")
+        transcript = _render_transcript(session)
+
+    coach = build_coach()
+    task = Task(
+        description=f"""Este es el chat completo de una sesión de Shark Tank. El Usuario es el emprendedor
+que presenta su negocio; los demás son inversionistas (tiburones).
+
+{transcript}
+
+Evalúa SOLO al Usuario (no a los tiburones). Califica de 1 a 10, con un comentario que cite ejemplos del chat:
+- coherence: ideas ordenadas, cifras consistentes, sin contradicciones.
+- formality: lenguaje y tono apropiados para inversionistas.
+- approach: cómo abordó a los tiburones, manejó preguntas, objeciones y presión.
+- pitch_quality: propuesta de valor, números, mercado y claridad de la petición.
+Después da una retroalimentación general (overall), lo que hizo bien (strengths) y consejos concretos
+y accionables para mejorar (improvements). Si el chat es corto, dilo y evalúa solo con lo que hay.
+Responde ÚNICAMENTE en español de México.""",
+        expected_output="Evaluación estructurada del desempeño del emprendedor",
+        agent=coach,
+        output_pydantic=SummaryOutput,
+    )
+    output = (await Crew(agents=[coach], tasks=[task]).kickoff_async()).pydantic
+    if output is None:
+        raise RuntimeError("El coach no devolvió una evaluación estructurada")
+    return output

@@ -74,3 +74,22 @@ class ContextEntry(BaseModel):
     recipient: str  # "all" o nombre del tiburón (solo usuario)
     content: str  # texto completo
     summary: str | None = None  # versión mínima que leen los demás tiburones
+
+
+# ---- POST /session/{id}/summary
+class Criterion(BaseModel):
+    score: int = Field(ge=1, le=10, description="Calificación de 1 (muy mal) a 10 (excelente)")
+    comment: str = Field(min_length=1, description="Por qué esa calificación, con ejemplos concretos del chat")
+
+
+class SummaryOutput(BaseModel):
+    """What the coach LLM must produce (structured output) and what the endpoint returns."""
+    coherence: Criterion = Field(description="Coherencia: ideas ordenadas, cifras consistentes, sin contradicciones")
+    formality: Criterion = Field(description="Formalidad: lenguaje y tono apropiados para presentar a inversionistas")
+    approach: Criterion = Field(
+        description="Forma de abordar a los tiburones: manejo de preguntas, objeciones y presión; seguridad"
+    )
+    pitch_quality: Criterion = Field(description="Calidad del pitch: propuesta de valor, números, mercado, petición")
+    overall: str = Field(min_length=1, description="Retroalimentación general del desempeño, en un párrafo")
+    strengths: List[str] = Field(min_length=1, description="Lo que hizo bien")
+    improvements: List[str] = Field(min_length=1, description="Consejos concretos y accionables para mejorar")
