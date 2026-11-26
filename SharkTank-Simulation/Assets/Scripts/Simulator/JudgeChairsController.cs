@@ -64,7 +64,8 @@ namespace SharkTank.UI
         /// Starts all three chair movements in the same frame.
         /// </summary>
         /// <param name="attitudes">Attitudes in left-to-right judge order.</param>
-        public void ApplyAttitudes(IList<int> attitudes)
+        /// <param name="judgesOut">Judges whose chairs must remain at their current heights.</param>
+        public void ApplyAttitudes(IList<int> attitudes, IList<bool> judgesOut = null)
         {
             RefreshChairCache();
             UnsubscribeFromMovers();
@@ -85,13 +86,17 @@ namespace SharkTank.UI
                     continue;
                 }
 
+                if (judgesOut != null && i < judgesOut.Count && judgesOut[i])
+                {
+                    continue;
+                }
+
                 if (!mover.isActiveAndEnabled)
                 {
                     Debug.LogWarning("The chair mover at left-to-right index " + i + " is inactive and will not move.", mover);
                     continue;
                 }
 
-                int attitude = attitudes != null && i < attitudes.Count ? attitudes[i] : 0;
                 remainingChairs++;
                 mover.OnSettled += HandleChairSettled;
             }
@@ -105,7 +110,8 @@ namespace SharkTank.UI
             for (int i = 0; i < chairMovers.Length; i++)
             {
                 JudgeChairMover mover = chairMovers[i];
-                if (mover == null || !mover.isActiveAndEnabled)
+                if (mover == null || !mover.isActiveAndEnabled ||
+                    (judgesOut != null && i < judgesOut.Count && judgesOut[i]))
                 {
                     continue;
                 }
