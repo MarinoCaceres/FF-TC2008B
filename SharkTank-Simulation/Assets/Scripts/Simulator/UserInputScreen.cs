@@ -13,6 +13,8 @@ namespace SharkTank.UI
     {
         private const float TransitionDuration = 0.25f;
         private const float PanelSlideDistance = 18f;
+        internal const string PitchHelpHint =
+            "Empieza con: «Ayudamos a [cliente] a resolver [problema] con [solución]». Después explica qué te diferencia, cómo gana dinero el negocio y qué evidencia tienes (ventas, usuarios o pruebas). Menciona por qué tu equipo puede ejecutarlo y termina con cuánto buscas y en qué usarás la inversión. Sé breve (60–90 segundos) y usa cifras concretas.";
         private static readonly string[] JudgeCameraPoseNames =
         {
             "Judge1CameraPose",
@@ -25,12 +27,29 @@ namespace SharkTank.UI
         [SerializeField] private CanvasGroup rootGroup;
         [Tooltip("Text describing the current task.")]
         [SerializeField] private TMP_Text currentTaskLabel;
+        [Tooltip("Question the user is currently answering.")]
+        [SerializeField] private TMP_Text questionTextLabel;
         [Tooltip("Multiline field for the user's response.")]
         [SerializeField] private TMP_InputField inputField;
         [Tooltip("Placeholder shown while the response is empty.")]
         [SerializeField] private TMP_Text placeholderLabel;
         [Tooltip("Button that submits the response.")]
         [SerializeField] private Button enterButton;
+        [Tooltip("Scene button that opens the current question hint.")]
+        [SerializeField] private Button helpButton;
+        [Header("Question help popup")]
+        [Tooltip("Full-screen popup overlay, hidden until the player opens it.")]
+        [SerializeField] private GameObject helpPopupRoot;
+        [Tooltip("Button on the overlay that closes the popup when clicked outside the panel.")]
+        [SerializeField] private Button helpOverlayButton;
+        [Tooltip("Button surface that prevents clicks inside the panel from closing the popup.")]
+        [SerializeField] private Button helpPanelBlockerButton;
+        [Tooltip("Button that closes the popup from its top-right corner.")]
+        [SerializeField] private Button closeHelpButton;
+        [Tooltip("Text label displaying the current question hint.")]
+        [SerializeField] private TMP_Text helpHintLabel;
+        [Tooltip("Title indicating whether the hint is for the pitch or a judge's question.")]
+        [SerializeField] private TMP_Text helpTitleLabel;
         [Tooltip("Bottom panel animated while the input screen is shown.")]
         [SerializeField] private RectTransform bottomPanel;
 
@@ -64,10 +83,16 @@ namespace SharkTank.UI
         [SerializeField] private float judgeVerticalPanCycleDuration = 4.5f;
 
         private Vector2 bottomPanelVisiblePosition;
+        private RectTransform taskPanel;
+        private float taskPanelMinimumHeight;
+        private float taskLabelVerticalPadding;
         private Coroutine transitionCoroutine;
         private Coroutine cameraTransitionCoroutine;
         private Vector3 previousCameraPosition;
         private Quaternion previousCameraRotation;
+        private int questionJudgeCameraIndex = -1;
+        private string currentHelpHint;
+        private bool hasHelpContent;
         private bool hasPreviousCameraPose;
         private bool warnedAboutMissingJudgePoses;
         private bool canInteract = true;
@@ -94,9 +119,17 @@ namespace SharkTank.UI
                 rootGroup.blocksRaycasts = false;
             }
 
+            EnsureQuestionTextLabel();
+            EnsureHelpUI();
+            if (questionTextLabel != null)
+            {
+                questionTextLabel.text = string.Empty;
+                questionTextLabel.gameObject.SetActive(false);
+            }
+
             if (inputField != null)
             {
-                inputField.characterLimit = 800;
+                inputField.characterLimit = 2000;
                 inputField.onValueChanged.AddListener(HandleInputChanged);
             }
 
@@ -119,6 +152,17 @@ namespace SharkTank.UI
                 bottomPanelVisiblePosition = bottomPanel.anchoredPosition;
             }
 
+            if (currentTaskLabel != null)
+            {
+                taskPanel = currentTaskLabel.transform.parent as RectTransform;
+                if (taskPanel != null)
+                {
+                    taskPanelMinimumHeight = taskPanel.sizeDelta.y;
+                    RectTransform taskLabelRect = currentTaskLabel.rectTransform;
+                    taskLabelVerticalPadding = taskLabelRect.offsetMin.y - taskLabelRect.offsetMax.y;
+                }
+            }
+
             canInteract = false;
             UpdateEnterButton();
         }
@@ -134,6 +178,21 @@ namespace SharkTank.UI
             {
                 enterButton.onClick.RemoveListener(HandleSubmit);
             }
+
+            if (helpButton != null)
+            {
+                helpButton.onClick.RemoveListener(OpenHelpPopup);
+            }
+
+            if (helpOverlayButton != null)
+            {
+                helpOverlayButton.onClick.RemoveListener(CloseHelpPopup);
+            }
+
+            if (closeHelpButton != null)
+            {
+                closeHelpButton.onClick.RemoveListener(CloseHelpPopup);
+            }
         }
 
         /// <summary>
@@ -141,11 +200,30 @@ namespace SharkTank.UI
         /// </summary>
         /// <param name="taskText">The task shown above the response field.</param>
         /// <param name="placeholderText">The hint shown in the empty response field.</param>
-        public void Show(string taskText, string placeholderText)
+        /// <param name="questionText">The question shown above the response field.</param>
+        /// <param name="questionHint">The hint associated with the current pitch or question.</param>
+        public void Show(string taskText, string placeholderText, string questionText = null, string questionHint = null)
         {
+            CloseHelpPopup();
+            bool hasQuestion = !string.IsNullOrWhiteSpace(questionText);
+            hasHelpContent = hasQuestion || !string.IsNullOrWhiteSpace(questionHint);
+            currentHelpHint = questionHint;
+
+            if (helpTitleLabel != null)
+            {
+                helpTitleLabel.text = hasQuestion ? "AYUDA DEL JUEZ" : "GUÍA PARA TU PITCH";
+            }
+
             if (currentTaskLabel != null)
             {
                 currentTaskLabel.text = taskText ?? string.Empty;
+                ResizeTaskPanelToFitText();
+            }
+
+            if (questionTextLabel != null)
+            {
+                questionTextLabel.text = questionText ?? string.Empty;
+                questionTextLabel.gameObject.SetActive(!string.IsNullOrWhiteSpace(questionText));
             }
 
             if (placeholderLabel != null)
@@ -159,6 +237,7 @@ namespace SharkTank.UI
             }
 
             canInteract = true;
+            UpdateHelpButton();
 
             if (rootGroup != null)
             {
@@ -186,11 +265,217 @@ namespace SharkTank.UI
             StartTransition(true);
         }
 
+        private void ResizeTaskPanelToFitText()
+        {
+            if (taskPanel == null || currentTaskLabel == null)
+            {
+                return;
+            }
+
+            RectTransform taskLabelRect = currentTaskLabel.rectTransform;
+            float labelWidth = taskLabelRect.rect.width;
+            if (labelWidth <= 0f)
+            {
+                return;
+            }
+
+            float preferredHeight = currentTaskLabel.GetPreferredValues(currentTaskLabel.text, labelWidth, 0f).y;
+            Vector2 panelSize = taskPanel.sizeDelta;
+            panelSize.y = Mathf.Max(taskPanelMinimumHeight, preferredHeight + taskLabelVerticalPadding);
+            taskPanel.sizeDelta = panelSize;
+        }
+
+        private void EnsureQuestionTextLabel()
+        {
+            if (questionTextLabel != null || rootGroup == null)
+            {
+                return;
+            }
+
+            Transform existingLabel = rootGroup.transform.Find("QuestionLabel");
+            if (existingLabel != null)
+            {
+                questionTextLabel = existingLabel.GetComponent<TMP_Text>();
+                if (questionTextLabel != null)
+                {
+                    return;
+                }
+            }
+
+            GameObject labelObject = new GameObject("QuestionLabel", typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI));
+            labelObject.transform.SetParent(rootGroup.transform, false);
+
+            RectTransform labelRect = labelObject.GetComponent<RectTransform>();
+            labelRect.anchorMin = new Vector2(0.5f, 0f);
+            labelRect.anchorMax = new Vector2(0.5f, 0f);
+            labelRect.pivot = new Vector2(0.5f, 0f);
+            labelRect.anchoredPosition = new Vector2(0f, 278f);
+            labelRect.sizeDelta = new Vector2(1580f, 110f);
+
+            questionTextLabel = labelObject.GetComponent<TextMeshProUGUI>();
+            questionTextLabel.font = currentTaskLabel != null ? currentTaskLabel.font : TMP_Settings.defaultFontAsset;
+            questionTextLabel.fontSize = 34f;
+            questionTextLabel.fontStyle = FontStyles.Bold;
+            questionTextLabel.color = Color.white;
+            questionTextLabel.alignment = TextAlignmentOptions.Center;
+            questionTextLabel.textWrappingMode = TextWrappingModes.Normal;
+            questionTextLabel.outlineColor = Color.black;
+            questionTextLabel.outlineWidth = 0.25f;
+            questionTextLabel.raycastTarget = false;
+        }
+
+        private void EnsureHelpUI()
+        {
+            if (rootGroup == null)
+            {
+                Debug.LogWarning("UserInputScreen cannot create the question help UI because its root CanvasGroup is missing.", this);
+                return;
+            }
+
+            if (helpButton == null)
+            {
+                Transform helpButtonTransform = rootGroup.transform.Find("HelpButton");
+                if (helpButtonTransform != null)
+                {
+                    helpButton = helpButtonTransform.GetComponent<Button>();
+                }
+            }
+
+            if (helpButton == null)
+            {
+                Debug.LogWarning("UserInputScreen cannot find its HelpButton scene object. Run SharkTank > Build User Input Screen.", this);
+                return;
+            }
+
+            if (helpPopupRoot == null)
+            {
+                Transform popupTransform = rootGroup.transform.Find("HelpPopup");
+                if (popupTransform != null)
+                {
+                    helpPopupRoot = popupTransform.gameObject;
+                }
+            }
+
+            if (helpOverlayButton == null && helpPopupRoot != null)
+            {
+                helpOverlayButton = helpPopupRoot.GetComponent<Button>();
+            }
+
+            if (helpPanelBlockerButton == null && helpPopupRoot != null)
+            {
+                helpPanelBlockerButton = helpPopupRoot.transform.Find("HelpPanel")?.GetComponent<Button>();
+            }
+
+            if (closeHelpButton == null && helpPopupRoot != null)
+            {
+                closeHelpButton = helpPopupRoot.transform.Find("HelpPanel/CloseHelpButton")?.GetComponent<Button>();
+            }
+
+            if (helpHintLabel == null && helpPopupRoot != null)
+            {
+                helpHintLabel = helpPopupRoot.transform.Find("HelpPanel/HelpHintText")?.GetComponent<TMP_Text>();
+            }
+
+            if (helpTitleLabel == null && helpPopupRoot != null)
+            {
+                helpTitleLabel = helpPopupRoot.transform.Find("HelpPanel/HelpTitle")?.GetComponent<TMP_Text>();
+            }
+
+            if (helpPopupRoot == null ||
+                helpOverlayButton == null ||
+                helpPanelBlockerButton == null ||
+                closeHelpButton == null ||
+                helpHintLabel == null ||
+                helpTitleLabel == null)
+            {
+                Debug.LogWarning("UserInputScreen cannot find its HelpPopup scene objects. Run SharkTank > Build User Input Screen.", this);
+                return;
+            }
+
+            Image helpButtonImage = helpButton.targetGraphic as Image;
+            if (helpButtonImage == null)
+            {
+                helpButtonImage = helpButton.GetComponent<Image>();
+            }
+
+            if (helpButtonImage != null)
+            {
+                helpButtonImage.color = UITheme.Accent;
+            }
+
+            ConfigureHelpButton(helpButton, helpButtonImage);
+            helpButton.onClick.AddListener(OpenHelpPopup);
+            ConfigureHelpButton(
+                helpOverlayButton,
+                helpOverlayButton.targetGraphic as Image ?? helpOverlayButton.GetComponent<Image>());
+            helpOverlayButton.onClick.AddListener(CloseHelpPopup);
+            ConfigureHelpButton(
+                helpPanelBlockerButton,
+                helpPanelBlockerButton.targetGraphic as Image ?? helpPanelBlockerButton.GetComponent<Image>());
+            ConfigureHelpButton(
+                closeHelpButton,
+                closeHelpButton.targetGraphic as Image ?? closeHelpButton.GetComponent<Image>());
+            closeHelpButton.onClick.AddListener(CloseHelpPopup);
+            helpPopupRoot.SetActive(false);
+        }
+
+        private static void ConfigureHelpButton(Button button, Image image)
+        {
+            button.targetGraphic = image;
+            button.transition = Selectable.Transition.None;
+            button.navigation = new Navigation { mode = Navigation.Mode.None };
+        }
+
+        private void OpenHelpPopup()
+        {
+            if (!canInteract || !hasHelpContent)
+            {
+                return;
+            }
+
+            if (helpPopupRoot == null || helpHintLabel == null)
+            {
+                Debug.LogWarning("UserInputScreen cannot show the question hint because its popup UI is missing.", this);
+                return;
+            }
+
+            helpHintLabel.text = string.IsNullOrWhiteSpace(currentHelpHint)
+                ? "No hay una sugerencia disponible."
+                : currentHelpHint;
+            helpPopupRoot.SetActive(true);
+            helpPopupRoot.transform.SetAsLastSibling();
+        }
+
+        private void CloseHelpPopup()
+        {
+            if (helpPopupRoot != null)
+            {
+                helpPopupRoot.SetActive(false);
+            }
+        }
+
+        private void UpdateHelpButton()
+        {
+            if (helpButton == null)
+            {
+                return;
+            }
+
+            helpButton.gameObject.SetActive(true);
+            helpButton.interactable = canInteract && hasHelpContent;
+            Graphic targetGraphic = helpButton.targetGraphic;
+            if (targetGraphic != null)
+            {
+                targetGraphic.color = hasHelpContent ? UITheme.Accent : UITheme.Disabled;
+            }
+        }
+
         /// <summary>
         /// Fades out the screen and disables its interaction when the fade completes.
         /// </summary>
         public void Hide()
         {
+            CloseHelpPopup();
             ReturnCameraToPreviousPose();
             StartTransition(false);
         }
@@ -201,6 +486,7 @@ namespace SharkTank.UI
         /// <param name="restoreCameraPose">Whether to move the camera back to its saved pose while hiding.</param>
         public IEnumerator HideAndWait(bool restoreCameraPose = true)
         {
+            CloseHelpPopup();
             if (restoreCameraPose)
             {
                 ReturnCameraToPreviousPose();
@@ -244,6 +530,29 @@ namespace SharkTank.UI
             StopCameraMotion();
             hasPreviousCameraPose = false;
             presentationCamera.transform.SetPositionAndRotation(targetPose.position, targetPose.rotation);
+        }
+
+        /// <summary>
+        /// Restricts question-screen judge cutaways to the judge asking the current question.
+        /// </summary>
+        /// <param name="judgeIndex">The asking judge's zero-based left-to-right index.</param>
+        public void SetQuestionJudgeCamera(int judgeIndex)
+        {
+            if (judgeIndex < 0 || judgeIndex >= JudgeCameraPoseNames.Length)
+            {
+                Debug.LogWarning("UserInputScreen received an invalid question judge camera index: " + judgeIndex + ".", this);
+                return;
+            }
+
+            questionJudgeCameraIndex = judgeIndex;
+        }
+
+        /// <summary>
+        /// Allows question-screen cutaways to use any configured judge again.
+        /// </summary>
+        public void ClearQuestionJudgeCamera()
+        {
+            questionJudgeCameraIndex = -1;
         }
 
         /// <summary>
@@ -291,6 +600,10 @@ namespace SharkTank.UI
         public void SetInteractable(bool value)
         {
             canInteract = value;
+            if (!value)
+            {
+                CloseHelpPopup();
+            }
 
             if (inputField != null)
             {
@@ -298,6 +611,7 @@ namespace SharkTank.UI
             }
 
             UpdateEnterButton();
+            UpdateHelpButton();
         }
 
         [ContextMenu("Test: Show Pitch")]
@@ -305,7 +619,7 @@ namespace SharkTank.UI
         {
             OnSubmitted -= LogTestSubmission;
             OnSubmitted += LogTestSubmission;
-            Show("Presenta tu pitch", "Escribe tu pitch aquí...");
+            Show("Presenta tu pitch", "Escribe tu pitch aquí...", questionHint: PitchHelpHint);
         }
 
         [ContextMenu("Test: Show Answer")]
@@ -313,7 +627,11 @@ namespace SharkTank.UI
         {
             OnSubmitted -= LogTestSubmission;
             OnSubmitted += LogTestSubmission;
-            Show("Responde a los jueces", "Escribe tu respuesta aquí...");
+            Show(
+                "Responde a los jueces",
+                "Escribe tu respuesta aquí...",
+                "¿Cómo planeas financiar el crecimiento de tu empresa?",
+                "Explica tus fuentes de capital, cuánto necesitas, en qué lo invertirás y cómo sostendrás el crecimiento.");
         }
 
         [ContextMenu("Test: Hide")]
@@ -627,7 +945,8 @@ namespace SharkTank.UI
             int availableCount = 0;
             for (int i = 0; i < judgeCameraPoses.Length; i++)
             {
-                if (judgeCameraPoses[i] != null)
+                if (judgeCameraPoses[i] != null &&
+                    (questionJudgeCameraIndex < 0 || i == questionJudgeCameraIndex))
                 {
                     availableCount++;
                 }
@@ -648,7 +967,9 @@ namespace SharkTank.UI
             int selectedCandidate = UnityEngine.Random.Range(0, candidatesWithoutPrevious);
             for (int i = 0; i < judgeCameraPoses.Length; i++)
             {
-                if (judgeCameraPoses[i] == null || (excludePrevious && i == previousIndex))
+                if (judgeCameraPoses[i] == null ||
+                    (questionJudgeCameraIndex >= 0 && i != questionJudgeCameraIndex) ||
+                    (excludePrevious && i == previousIndex))
                 {
                     continue;
                 }
@@ -765,6 +1086,7 @@ namespace SharkTank.UI
                 return;
             }
 
+            CloseHelpPopup();
             OnSubmitted?.Invoke(submittedText);
         }
 

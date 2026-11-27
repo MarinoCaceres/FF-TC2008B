@@ -15,8 +15,11 @@ namespace SharkTank.UI.Editor
     internal static class BuildUserInputScreenUI
     {
         private const string CanvasName = "Canvas";
-        private const string UserInputRootName = "UserInput";
-        private const string ControllerObjectName = "UserInputScreenController";
+        private const string UserInputUIName = "UserInputUI";
+        private const string LegacyUserInputUIName = "UserInput";
+        private const string ControllerObjectName = "UserInputController";
+        private const string LegacyControllerObjectName = "UserInputScreenController";
+        private const string SampleJudgeQuestion = "¿Cuáles son tus objetivos principales con este proyecto?";
         private static readonly Vector2 ReferenceResolution = new Vector2(1920f, 1080f);
         private static readonly string[] JudgeCameraPoseNames =
         {
@@ -44,9 +47,20 @@ namespace SharkTank.UI.Editor
 
             EnsureEventSystem();
 
-            Transform existingUserInput = canvas.transform.Find(UserInputRootName);
+            Transform existingUserInput = canvas.transform.Find(UserInputUIName);
+            if (existingUserInput == null)
+            {
+                existingUserInput = canvas.transform.Find(LegacyUserInputUIName);
+                if (existingUserInput != null)
+                {
+                    Undo.RecordObject(existingUserInput.gameObject, "Rename User Input UI");
+                    existingUserInput.name = UserInputUIName;
+                }
+            }
+
             GameObject userInputRoot;
             TMP_Text taskText;
+            TMP_Text questionText;
             TMP_InputField inputField;
             TMP_Text placeholder;
             Button enterButton;
@@ -54,13 +68,27 @@ namespace SharkTank.UI.Editor
             {
                 userInputRoot = existingUserInput.gameObject;
                 taskText = FindComponent<TMP_Text>(existingUserInput, "TaskPanel/CurrentTaskLabel");
+                questionText = FindComponent<TMP_Text>(existingUserInput, "QuestionLabel");
                 inputField = FindComponent<TMP_InputField>(existingUserInput, "BottomPanel/ResponseInputField");
                 placeholder = FindComponent<TMP_Text>(existingUserInput, "BottomPanel/ResponseInputField/Viewport/Placeholder");
                 enterButton = FindComponent<Button>(existingUserInput, "BottomPanel/EnterButton");
+                if (questionText == null)
+                {
+                    questionText = BuildQuestionLabel(userInputRoot.transform, defaultFont);
+                }
+                else
+                {
+                    if (string.IsNullOrWhiteSpace(questionText.text))
+                    {
+                        questionText.text = SampleJudgeQuestion;
+                    }
+
+                    questionText.gameObject.SetActive(true);
+                }
             }
             else
             {
-                userInputRoot = new GameObject(UserInputRootName, typeof(RectTransform), typeof(CanvasGroup));
+                userInputRoot = new GameObject(UserInputUIName, typeof(RectTransform), typeof(CanvasGroup));
                 Undo.RegisterCreatedObjectUndo(userInputRoot, "Build User Input Screen");
                 userInputRoot.transform.SetParent(canvas.transform, false);
                 RectTransform userInputRect = userInputRoot.GetComponent<RectTransform>();
@@ -73,6 +101,7 @@ namespace SharkTank.UI.Editor
                 Sprite roundedSprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Background.psd");
                 taskText = BuildTaskPanel(userInputRoot.transform, defaultFont, roundedSprite);
                 BuildBottomPanel(userInputRoot.transform, defaultFont, roundedSprite, out inputField, out placeholder, out enterButton);
+                questionText = BuildQuestionLabel(userInputRoot.transform, defaultFont);
             }
 
             CanvasGroup rootGroup = userInputRoot.GetComponent<CanvasGroup>();
@@ -80,31 +109,59 @@ namespace SharkTank.UI.Editor
             {
                 rootGroup = Undo.AddComponent<CanvasGroup>(userInputRoot);
             }
+            rootGroup.alpha = 1f;
 
             RectTransform bottomPanel = userInputRoot.transform.Find("BottomPanel") as RectTransform;
+            Button helpButton = FindComponent<Button>(userInputRoot.transform, "HelpButton");
+            if (helpButton == null)
+            {
+                helpButton = BuildHelpButton(userInputRoot.transform, defaultFont);
+            }
+
+            GameObject helpPopupRoot = userInputRoot.transform.Find("HelpPopup")?.gameObject;
+            if (helpPopupRoot == null)
+            {
+                BuildHelpPopup(userInputRoot.transform, defaultFont);
+                helpPopupRoot = userInputRoot.transform.Find("HelpPopup").gameObject;
+            }
+            helpPopupRoot.SetActive(false);
+
+            Button helpOverlayButton = FindComponent<Button>(userInputRoot.transform, "HelpPopup");
+            Button helpPanelBlockerButton = FindComponent<Button>(userInputRoot.transform, "HelpPopup/HelpPanel");
+            Button closeHelpButton = FindComponent<Button>(userInputRoot.transform, "HelpPopup/HelpPanel/CloseHelpButton");
+            TMP_Text helpHintLabel = FindComponent<TMP_Text>(userInputRoot.transform, "HelpPopup/HelpPanel/HelpHintText");
+            TMP_Text helpTitleLabel = FindComponent<TMP_Text>(userInputRoot.transform, "HelpPopup/HelpPanel/HelpTitle");
+
             UserInputScreen oldScreen = userInputRoot.GetComponent<UserInputScreen>();
             UserInputScreen screen = GetOrCreateController(activeScene, canvas, oldScreen);
 
             SerializedObject serializedScreen = new SerializedObject(screen);
             serializedScreen.FindProperty("rootGroup").objectReferenceValue = rootGroup;
             serializedScreen.FindProperty("currentTaskLabel").objectReferenceValue = taskText;
+            serializedScreen.FindProperty("questionTextLabel").objectReferenceValue = questionText;
             serializedScreen.FindProperty("inputField").objectReferenceValue = inputField;
             serializedScreen.FindProperty("placeholderLabel").objectReferenceValue = placeholder;
             serializedScreen.FindProperty("enterButton").objectReferenceValue = enterButton;
             serializedScreen.FindProperty("bottomPanel").objectReferenceValue = bottomPanel;
+            serializedScreen.FindProperty("helpButton").objectReferenceValue = helpButton;
+            serializedScreen.FindProperty("helpPopupRoot").objectReferenceValue = helpPopupRoot;
+            serializedScreen.FindProperty("helpOverlayButton").objectReferenceValue = helpOverlayButton;
+            serializedScreen.FindProperty("helpPanelBlockerButton").objectReferenceValue = helpPanelBlockerButton;
+            serializedScreen.FindProperty("closeHelpButton").objectReferenceValue = closeHelpButton;
+            serializedScreen.FindProperty("helpHintLabel").objectReferenceValue = helpHintLabel;
+            serializedScreen.FindProperty("helpTitleLabel").objectReferenceValue = helpTitleLabel;
             AssignCameraReferences(serializedScreen);
             serializedScreen.ApplyModifiedPropertiesWithoutUndo();
 
             AssignJudgeSequenceCameraController(activeScene, screen);
             EditorSceneManager.MarkSceneDirty(activeScene);
 
-            Transform inputFieldTransform = userInputRoot.transform.Find("BottomPanel/ResponseInputField");
-            GameObject selectionTarget = inputFieldTransform != null
-                ? inputFieldTransform.gameObject
-                : userInputRoot;
+            GameObject selectionTarget = helpButton != null
+                ? helpButton.gameObject
+                : questionText != null ? questionText.gameObject : userInputRoot;
             Selection.activeGameObject = selectionTarget;
             EditorGUIUtility.PingObject(selectionTarget);
-            Debug.Log("UserInput stays under Canvas; its UserInputScreenController is managed separately outside Canvas.");
+            Debug.Log("The judge response UI preview is visible. Edit HelpButton or HelpPopup under Canvas/UserInputUI in the Inspector.");
         }
 
         private static UserInputScreen GetOrCreateController(
@@ -113,6 +170,16 @@ namespace SharkTank.UI.Editor
             UserInputScreen oldScreen)
         {
             GameObject controllerObject = FindSceneObject(scene, ControllerObjectName);
+            if (controllerObject == null)
+            {
+                controllerObject = FindSceneObject(scene, LegacyControllerObjectName);
+                if (controllerObject != null)
+                {
+                    Undo.RecordObject(controllerObject, "Rename User Input Controller");
+                    controllerObject.name = ControllerObjectName;
+                }
+            }
+
             if (controllerObject == null)
             {
                 controllerObject = new GameObject(ControllerObjectName);
@@ -274,6 +341,173 @@ namespace SharkTank.UI.Editor
                 new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(0f, 0f), new Vector2(22f, 14f), new Vector2(-44f, -42f));
             taskText.textWrappingMode = TextWrappingModes.Normal;
             return taskText;
+        }
+
+        private static TMP_Text BuildQuestionLabel(Transform parent, TMP_FontAsset font)
+        {
+            TMP_Text questionText = CreateText("QuestionLabel", parent, font, SampleJudgeQuestion, 34f, Color.white,
+                TextAlignmentOptions.Center, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
+                new Vector2(0f, 278f), new Vector2(1580f, 110f));
+            questionText.fontStyle = FontStyles.Bold;
+            questionText.outlineColor = Color.black;
+            questionText.outlineWidth = 0.25f;
+            questionText.gameObject.SetActive(true);
+            return questionText;
+        }
+
+        private static Button BuildHelpButton(Transform parent, TMP_FontAsset font)
+        {
+            RectTransform buttonRect = CreateRect(
+                "HelpButton",
+                parent,
+                Vector2.one,
+                Vector2.one,
+                Vector2.one,
+                new Vector2(-48f, -48f),
+                new Vector2(190f, 68f));
+            Undo.RegisterCreatedObjectUndo(buttonRect.gameObject, "Build User Input Help Button");
+
+            Sprite roundedSprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Background.psd");
+            Image buttonImage = buttonRect.gameObject.AddComponent<Image>();
+            buttonImage.sprite = roundedSprite;
+            buttonImage.type = Image.Type.Sliced;
+            buttonImage.color = UITheme.Accent;
+
+            Button button = buttonRect.gameObject.AddComponent<Button>();
+            ConfigureHelpButton(button, buttonImage);
+
+            CreateText(
+                "HelpLabel",
+                buttonRect,
+                font,
+                "? AYUDA",
+                25f,
+                UITheme.TextCream,
+                TextAlignmentOptions.Center,
+                Vector2.zero,
+                Vector2.one,
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                Vector2.zero);
+            return button;
+        }
+
+        private static void BuildHelpPopup(Transform parent, TMP_FontAsset font)
+        {
+            GameObject popupObject = new GameObject(
+                "HelpPopup",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image),
+                typeof(Button),
+                typeof(CanvasGroup));
+            Undo.RegisterCreatedObjectUndo(popupObject, "Build Question Help Popup");
+            popupObject.transform.SetParent(parent, false);
+
+            RectTransform popupRect = popupObject.GetComponent<RectTransform>();
+            popupRect.anchorMin = Vector2.zero;
+            popupRect.anchorMax = Vector2.one;
+            popupRect.offsetMin = Vector2.zero;
+            popupRect.offsetMax = Vector2.zero;
+
+            Image overlayImage = popupObject.GetComponent<Image>();
+            overlayImage.color = new Color(0f, 0f, 0f, 0.55f);
+            overlayImage.raycastTarget = true;
+            Button overlayButton = popupObject.GetComponent<Button>();
+            ConfigureHelpButton(overlayButton, overlayImage);
+
+            CanvasGroup popupGroup = popupObject.GetComponent<CanvasGroup>();
+            popupGroup.alpha = 1f;
+            popupGroup.interactable = true;
+            popupGroup.blocksRaycasts = true;
+
+            RectTransform panelRect = CreateRect(
+                "HelpPanel",
+                popupObject.transform,
+                new Vector2(0.5f, 0.5f),
+                new Vector2(0.5f, 0.5f),
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                new Vector2(1080f, 590f));
+            Image panelImage = panelRect.gameObject.AddComponent<Image>();
+            panelImage.color = UITheme.PanelAccent;
+            panelImage.raycastTarget = true;
+            Button panelButton = panelRect.gameObject.AddComponent<Button>();
+            ConfigureHelpButton(panelButton, panelImage);
+
+            Sprite roundedSprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Background.psd");
+            CreatePanelBackground(panelRect, roundedSprite, UITheme.PanelBackground, new Vector2(4f, 4f), new Vector2(-4f, -4f));
+            CreateText(
+                "HelpTitle",
+                panelRect,
+                font,
+                "AYUDA DEL JUEZ",
+                34f,
+                UITheme.TextDark,
+                TextAlignmentOptions.Left,
+                new Vector2(0f, 1f),
+                new Vector2(1f, 1f),
+                new Vector2(0f, 1f),
+                new Vector2(54f, -46f),
+                new Vector2(-150f, 72f));
+
+            RectTransform closeButtonRect = CreateRect(
+                "CloseHelpButton",
+                panelRect,
+                Vector2.one,
+                Vector2.one,
+                Vector2.one,
+                new Vector2(-30f, -26f),
+                new Vector2(64f, 64f));
+            Image closeButtonImage = closeButtonRect.gameObject.AddComponent<Image>();
+            closeButtonImage.sprite = roundedSprite;
+            closeButtonImage.type = Image.Type.Sliced;
+            closeButtonImage.color = UITheme.Accent;
+            Button closeButton = closeButtonRect.gameObject.AddComponent<Button>();
+            ConfigureHelpButton(closeButton, closeButtonImage);
+            CreateText(
+                "CloseLabel",
+                closeButtonRect,
+                font,
+                "X",
+                28f,
+                UITheme.TextCream,
+                TextAlignmentOptions.Center,
+                Vector2.zero,
+                Vector2.one,
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                Vector2.zero);
+
+            TMP_Text hintLabel = CreateText(
+                "HelpHintText",
+                panelRect,
+                font,
+                string.Empty,
+                30f,
+                UITheme.TextDark,
+                TextAlignmentOptions.TopLeft,
+                Vector2.zero,
+                Vector2.one,
+                Vector2.zero,
+                new Vector2(58f, 54f),
+                new Vector2(-116f, -150f));
+            hintLabel.textWrappingMode = TextWrappingModes.Normal;
+
+            popupObject.SetActive(false);
+        }
+
+        private static void ConfigureHelpButton(Button button, Image image)
+        {
+            button.targetGraphic = image;
+            button.transition = Selectable.Transition.None;
+            button.navigation = new Navigation { mode = Navigation.Mode.None };
+            ColorBlock colors = button.colors;
+            colors.normalColor = UITheme.Accent;
+            colors.highlightedColor = UITheme.ButtonHover;
+            colors.pressedColor = UITheme.ButtonPressed;
+            colors.disabledColor = UITheme.Disabled;
+            button.colors = colors;
         }
 
         private static void BuildBottomPanel(Transform parent, TMP_FontAsset font, Sprite roundedSprite,
