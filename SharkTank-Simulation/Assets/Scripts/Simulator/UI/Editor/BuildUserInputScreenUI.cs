@@ -15,8 +15,10 @@ namespace SharkTank.UI.Editor
     internal static class BuildUserInputScreenUI
     {
         private const string CanvasName = "Canvas";
-        private const string UserInputRootName = "UserInput";
-        private const string ControllerObjectName = "UserInputScreenController";
+        private const string UserInputUIName = "UserInputUI";
+        private const string LegacyUserInputUIName = "UserInput";
+        private const string ControllerObjectName = "UserInputController";
+        private const string LegacyControllerObjectName = "UserInputScreenController";
         private const string SampleJudgeQuestion = "¿Cuáles son tus objetivos principales con este proyecto?";
         private static readonly Vector2 ReferenceResolution = new Vector2(1920f, 1080f);
         private static readonly string[] JudgeCameraPoseNames =
@@ -45,7 +47,17 @@ namespace SharkTank.UI.Editor
 
             EnsureEventSystem();
 
-            Transform existingUserInput = canvas.transform.Find(UserInputRootName);
+            Transform existingUserInput = canvas.transform.Find(UserInputUIName);
+            if (existingUserInput == null)
+            {
+                existingUserInput = canvas.transform.Find(LegacyUserInputUIName);
+                if (existingUserInput != null)
+                {
+                    Undo.RecordObject(existingUserInput.gameObject, "Rename User Input UI");
+                    existingUserInput.name = UserInputUIName;
+                }
+            }
+
             GameObject userInputRoot;
             TMP_Text taskText;
             TMP_Text questionText;
@@ -76,7 +88,7 @@ namespace SharkTank.UI.Editor
             }
             else
             {
-                userInputRoot = new GameObject(UserInputRootName, typeof(RectTransform), typeof(CanvasGroup));
+                userInputRoot = new GameObject(UserInputUIName, typeof(RectTransform), typeof(CanvasGroup));
                 Undo.RegisterCreatedObjectUndo(userInputRoot, "Build User Input Screen");
                 userInputRoot.transform.SetParent(canvas.transform, false);
                 RectTransform userInputRect = userInputRoot.GetComponent<RectTransform>();
@@ -100,6 +112,26 @@ namespace SharkTank.UI.Editor
             rootGroup.alpha = 1f;
 
             RectTransform bottomPanel = userInputRoot.transform.Find("BottomPanel") as RectTransform;
+            Button helpButton = FindComponent<Button>(userInputRoot.transform, "HelpButton");
+            if (helpButton == null)
+            {
+                helpButton = BuildHelpButton(userInputRoot.transform, defaultFont);
+            }
+
+            GameObject helpPopupRoot = userInputRoot.transform.Find("HelpPopup")?.gameObject;
+            if (helpPopupRoot == null)
+            {
+                BuildHelpPopup(userInputRoot.transform, defaultFont);
+                helpPopupRoot = userInputRoot.transform.Find("HelpPopup").gameObject;
+            }
+            helpPopupRoot.SetActive(false);
+
+            Button helpOverlayButton = FindComponent<Button>(userInputRoot.transform, "HelpPopup");
+            Button helpPanelBlockerButton = FindComponent<Button>(userInputRoot.transform, "HelpPopup/HelpPanel");
+            Button closeHelpButton = FindComponent<Button>(userInputRoot.transform, "HelpPopup/HelpPanel/CloseHelpButton");
+            TMP_Text helpHintLabel = FindComponent<TMP_Text>(userInputRoot.transform, "HelpPopup/HelpPanel/HelpHintText");
+            TMP_Text helpTitleLabel = FindComponent<TMP_Text>(userInputRoot.transform, "HelpPopup/HelpPanel/HelpTitle");
+
             UserInputScreen oldScreen = userInputRoot.GetComponent<UserInputScreen>();
             UserInputScreen screen = GetOrCreateController(activeScene, canvas, oldScreen);
 
@@ -111,18 +143,25 @@ namespace SharkTank.UI.Editor
             serializedScreen.FindProperty("placeholderLabel").objectReferenceValue = placeholder;
             serializedScreen.FindProperty("enterButton").objectReferenceValue = enterButton;
             serializedScreen.FindProperty("bottomPanel").objectReferenceValue = bottomPanel;
+            serializedScreen.FindProperty("helpButton").objectReferenceValue = helpButton;
+            serializedScreen.FindProperty("helpPopupRoot").objectReferenceValue = helpPopupRoot;
+            serializedScreen.FindProperty("helpOverlayButton").objectReferenceValue = helpOverlayButton;
+            serializedScreen.FindProperty("helpPanelBlockerButton").objectReferenceValue = helpPanelBlockerButton;
+            serializedScreen.FindProperty("closeHelpButton").objectReferenceValue = closeHelpButton;
+            serializedScreen.FindProperty("helpHintLabel").objectReferenceValue = helpHintLabel;
+            serializedScreen.FindProperty("helpTitleLabel").objectReferenceValue = helpTitleLabel;
             AssignCameraReferences(serializedScreen);
             serializedScreen.ApplyModifiedPropertiesWithoutUndo();
 
             AssignJudgeSequenceCameraController(activeScene, screen);
             EditorSceneManager.MarkSceneDirty(activeScene);
 
-            GameObject selectionTarget = questionText != null
-                ? questionText.gameObject
-                : userInputRoot;
+            GameObject selectionTarget = helpButton != null
+                ? helpButton.gameObject
+                : questionText != null ? questionText.gameObject : userInputRoot;
             Selection.activeGameObject = selectionTarget;
             EditorGUIUtility.PingObject(selectionTarget);
-            Debug.Log("The judge response UI preview is visible. Edit QuestionLabel under Canvas/UserInput to customize its text and appearance.");
+            Debug.Log("The judge response UI preview is visible. Edit HelpButton or HelpPopup under Canvas/UserInputUI in the Inspector.");
         }
 
         private static UserInputScreen GetOrCreateController(
@@ -131,6 +170,16 @@ namespace SharkTank.UI.Editor
             UserInputScreen oldScreen)
         {
             GameObject controllerObject = FindSceneObject(scene, ControllerObjectName);
+            if (controllerObject == null)
+            {
+                controllerObject = FindSceneObject(scene, LegacyControllerObjectName);
+                if (controllerObject != null)
+                {
+                    Undo.RecordObject(controllerObject, "Rename User Input Controller");
+                    controllerObject.name = ControllerObjectName;
+                }
+            }
+
             if (controllerObject == null)
             {
                 controllerObject = new GameObject(ControllerObjectName);
@@ -304,6 +353,161 @@ namespace SharkTank.UI.Editor
             questionText.outlineWidth = 0.25f;
             questionText.gameObject.SetActive(true);
             return questionText;
+        }
+
+        private static Button BuildHelpButton(Transform parent, TMP_FontAsset font)
+        {
+            RectTransform buttonRect = CreateRect(
+                "HelpButton",
+                parent,
+                Vector2.one,
+                Vector2.one,
+                Vector2.one,
+                new Vector2(-48f, -48f),
+                new Vector2(190f, 68f));
+            Undo.RegisterCreatedObjectUndo(buttonRect.gameObject, "Build User Input Help Button");
+
+            Sprite roundedSprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Background.psd");
+            Image buttonImage = buttonRect.gameObject.AddComponent<Image>();
+            buttonImage.sprite = roundedSprite;
+            buttonImage.type = Image.Type.Sliced;
+            buttonImage.color = UITheme.Accent;
+
+            Button button = buttonRect.gameObject.AddComponent<Button>();
+            ConfigureHelpButton(button, buttonImage);
+
+            CreateText(
+                "HelpLabel",
+                buttonRect,
+                font,
+                "? AYUDA",
+                25f,
+                UITheme.TextCream,
+                TextAlignmentOptions.Center,
+                Vector2.zero,
+                Vector2.one,
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                Vector2.zero);
+            return button;
+        }
+
+        private static void BuildHelpPopup(Transform parent, TMP_FontAsset font)
+        {
+            GameObject popupObject = new GameObject(
+                "HelpPopup",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image),
+                typeof(Button),
+                typeof(CanvasGroup));
+            Undo.RegisterCreatedObjectUndo(popupObject, "Build Question Help Popup");
+            popupObject.transform.SetParent(parent, false);
+
+            RectTransform popupRect = popupObject.GetComponent<RectTransform>();
+            popupRect.anchorMin = Vector2.zero;
+            popupRect.anchorMax = Vector2.one;
+            popupRect.offsetMin = Vector2.zero;
+            popupRect.offsetMax = Vector2.zero;
+
+            Image overlayImage = popupObject.GetComponent<Image>();
+            overlayImage.color = new Color(0f, 0f, 0f, 0.55f);
+            overlayImage.raycastTarget = true;
+            Button overlayButton = popupObject.GetComponent<Button>();
+            ConfigureHelpButton(overlayButton, overlayImage);
+
+            CanvasGroup popupGroup = popupObject.GetComponent<CanvasGroup>();
+            popupGroup.alpha = 1f;
+            popupGroup.interactable = true;
+            popupGroup.blocksRaycasts = true;
+
+            RectTransform panelRect = CreateRect(
+                "HelpPanel",
+                popupObject.transform,
+                new Vector2(0.5f, 0.5f),
+                new Vector2(0.5f, 0.5f),
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                new Vector2(1080f, 590f));
+            Image panelImage = panelRect.gameObject.AddComponent<Image>();
+            panelImage.color = UITheme.PanelAccent;
+            panelImage.raycastTarget = true;
+            Button panelButton = panelRect.gameObject.AddComponent<Button>();
+            ConfigureHelpButton(panelButton, panelImage);
+
+            Sprite roundedSprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Background.psd");
+            CreatePanelBackground(panelRect, roundedSprite, UITheme.PanelBackground, new Vector2(4f, 4f), new Vector2(-4f, -4f));
+            CreateText(
+                "HelpTitle",
+                panelRect,
+                font,
+                "AYUDA DEL JUEZ",
+                34f,
+                UITheme.TextDark,
+                TextAlignmentOptions.Left,
+                new Vector2(0f, 1f),
+                new Vector2(1f, 1f),
+                new Vector2(0f, 1f),
+                new Vector2(54f, -46f),
+                new Vector2(-150f, 72f));
+
+            RectTransform closeButtonRect = CreateRect(
+                "CloseHelpButton",
+                panelRect,
+                Vector2.one,
+                Vector2.one,
+                Vector2.one,
+                new Vector2(-30f, -26f),
+                new Vector2(64f, 64f));
+            Image closeButtonImage = closeButtonRect.gameObject.AddComponent<Image>();
+            closeButtonImage.sprite = roundedSprite;
+            closeButtonImage.type = Image.Type.Sliced;
+            closeButtonImage.color = UITheme.Accent;
+            Button closeButton = closeButtonRect.gameObject.AddComponent<Button>();
+            ConfigureHelpButton(closeButton, closeButtonImage);
+            CreateText(
+                "CloseLabel",
+                closeButtonRect,
+                font,
+                "X",
+                28f,
+                UITheme.TextCream,
+                TextAlignmentOptions.Center,
+                Vector2.zero,
+                Vector2.one,
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                Vector2.zero);
+
+            TMP_Text hintLabel = CreateText(
+                "HelpHintText",
+                panelRect,
+                font,
+                string.Empty,
+                30f,
+                UITheme.TextDark,
+                TextAlignmentOptions.TopLeft,
+                Vector2.zero,
+                Vector2.one,
+                Vector2.zero,
+                new Vector2(58f, 54f),
+                new Vector2(-116f, -150f));
+            hintLabel.textWrappingMode = TextWrappingModes.Normal;
+
+            popupObject.SetActive(false);
+        }
+
+        private static void ConfigureHelpButton(Button button, Image image)
+        {
+            button.targetGraphic = image;
+            button.transition = Selectable.Transition.None;
+            button.navigation = new Navigation { mode = Navigation.Mode.None };
+            ColorBlock colors = button.colors;
+            colors.normalColor = UITheme.Accent;
+            colors.highlightedColor = UITheme.ButtonHover;
+            colors.pressedColor = UITheme.ButtonPressed;
+            colors.disabledColor = UITheme.Disabled;
+            button.colors = colors;
         }
 
         private static void BuildBottomPanel(Transform parent, TMP_FontAsset font, Sprite roundedSprite,

@@ -1383,7 +1383,7 @@ MonoBehaviour:
   startButton: {fileID: 205418849}
   customizeButton: {fileID: 568212650}
   quitButton: {fileID: 949072662}
-  gameScene: SampleScene
+  gameScene: SimulatorScene
   customizationScene: Customization
 --- !u!4 &2032320418
 Transform:

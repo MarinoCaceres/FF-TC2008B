@@ -10,7 +10,7 @@ namespace SharkTank.UI
     public sealed class JudgeChairMover : MonoBehaviour
     {
         [Header("Movement")]
-        [Tooltip("Vertical distance moved for each attitude point.")]
+        [Tooltip("Vertical distance moved for each attitude point; positive attitudes rise and negative attitudes lower.")]
         [SerializeField] private float unitsPerStep = 1.5f;
         [Tooltip("Duration of the chair movement in seconds.")]
         [SerializeField] private float moveDuration = 1.2f;
@@ -51,7 +51,7 @@ namespace SharkTank.UI
         }
 
         /// <summary>
-        /// Animates the chair to the height associated with an attitude from -3 to +3.
+        /// Animates the chair upward for positive attitudes and downward for negative attitudes.
         /// </summary>
         /// <param name="attitude">The judge's attitude, clamped to -3 through +3.</param>
         public IEnumerator MoveToAttitude(int attitude)
@@ -62,7 +62,7 @@ namespace SharkTank.UI
             Vector3 startPosition = transform.position;
             Vector3 targetPosition = new Vector3(
                 startPosition.x,
-                baseY - clampedAttitude * unitsPerStep,
+                baseY + clampedAttitude * unitsPerStep,
                 startPosition.z);
 
             if (moveDuration <= 0f)

@@ -11,12 +11,15 @@ namespace SharkTank.UI.Editor
     /// <summary>
     /// Builds the judge speech UI and wires the feedback sequence in the active scene.
     /// </summary>
+    [InitializeOnLoad]
     internal static class BuildJudgeFeedbackUI
     {
         private const string SpeechRootName = "JudgeSpeechUI";
         private const string SequenceObjectName = "JudgeFeedbackSequence";
         private const string JudgesTopDownOverviewPointName = "JudgesTopDownOverviewPoint";
         private const string UserInputCameraPoseName = "UserInputCameraPose";
+        private const string SampleJudgeName = "Juez de Marketing";
+        private const string SampleSpeech = "Tu propuesta tiene una idea clara y un mercado atractivo. ¿Cómo planeas conseguir tus primeros clientes?";
         private const int JudgeCount = 3;
         private static readonly string[] JudgeCameraPointNames =
         {
@@ -30,6 +33,47 @@ namespace SharkTank.UI.Editor
             "Chair_Judge-2",
             "Chair_Judge-3"
         };
+
+        static BuildJudgeFeedbackUI()
+        {
+            EditorSceneManager.sceneOpened += HandleSceneOpened;
+            EditorApplication.delayCall += PreviewOpenScene;
+        }
+
+        private static void HandleSceneOpened(UnityEngine.SceneManagement.Scene scene, OpenSceneMode mode)
+        {
+            EditorApplication.delayCall += PreviewOpenScene;
+        }
+
+        private static void PreviewOpenScene()
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                return;
+            }
+
+            JudgeSpeechUI speechUI = Object.FindAnyObjectByType<JudgeSpeechUI>();
+            if (speechUI == null)
+            {
+                return;
+            }
+
+            SerializedObject serializedSpeechUI = new SerializedObject(speechUI);
+            CanvasGroup rootGroup = serializedSpeechUI.FindProperty("rootGroup").objectReferenceValue as CanvasGroup;
+            if (rootGroup == null)
+            {
+                return;
+            }
+
+            ApplyPreviewState(
+                rootGroup,
+                serializedSpeechUI.FindProperty("nameLabel").objectReferenceValue as TMP_Text,
+                serializedSpeechUI.FindProperty("bodyText").objectReferenceValue as TMP_Text,
+                serializedSpeechUI.FindProperty("arrowButton").objectReferenceValue as Button,
+                serializedSpeechUI.FindProperty("continueButton").objectReferenceValue as Button,
+                serializedSpeechUI.FindProperty("continueGroup").objectReferenceValue as CanvasGroup,
+                true);
+        }
 
         [MenuItem("SharkTank/Build Judge Feedback UI")]
         private static void Build()
@@ -211,8 +255,126 @@ namespace SharkTank.UI.Editor
             serializedSpeechUI.FindProperty("continueGroup").objectReferenceValue = continueGroup;
             serializedSpeechUI.ApplyModifiedPropertiesWithoutUndo();
 
+            nameLabel.text = SampleJudgeName;
+            ApplyPreviewState(rootGroup, nameLabel, bodyText, arrowButton, continueButton, continueGroup, true);
             ConfigureSequence(activeScene, speechUI);
             EditorSceneManager.MarkSceneDirty(activeScene);
+
+            Selection.activeGameObject = bodyText.gameObject;
+            EditorGUIUtility.PingObject(bodyText);
+            Debug.Log("Judge speech UI preview is visible. Edit BodyText under Canvas/JudgeSpeechUI/SpeechPanel to adjust the speech appearance.");
+        }
+
+        [MenuItem("SharkTank/Preview Judge Speech UI")]
+        private static void PreviewExisting()
+        {
+            SetExistingPreview(true);
+        }
+
+        [MenuItem("SharkTank/Hide Judge Speech UI Preview")]
+        private static void HideExistingPreview()
+        {
+            SetExistingPreview(false);
+        }
+
+        private static void SetExistingPreview(bool visible)
+        {
+            JudgeSpeechUI speechUI = Object.FindAnyObjectByType<JudgeSpeechUI>();
+            if (speechUI == null)
+            {
+                Debug.LogWarning("No JudgeSpeechUI was found in the open scene. Build the Judge Feedback UI first.");
+                return;
+            }
+
+            SerializedObject serializedSpeechUI = new SerializedObject(speechUI);
+            CanvasGroup rootGroup = serializedSpeechUI.FindProperty("rootGroup").objectReferenceValue as CanvasGroup;
+            TMP_Text nameLabel = serializedSpeechUI.FindProperty("nameLabel").objectReferenceValue as TMP_Text;
+            TMP_Text bodyText = serializedSpeechUI.FindProperty("bodyText").objectReferenceValue as TMP_Text;
+            Button arrowButton = serializedSpeechUI.FindProperty("arrowButton").objectReferenceValue as Button;
+            Button continueButton = serializedSpeechUI.FindProperty("continueButton").objectReferenceValue as Button;
+            CanvasGroup continueGroup = serializedSpeechUI.FindProperty("continueGroup").objectReferenceValue as CanvasGroup;
+
+            if (rootGroup == null)
+            {
+                Debug.LogWarning("JudgeSpeechUI needs its Root Group reference assigned before it can be previewed.", speechUI);
+                return;
+            }
+
+            List<Object> undoTargets = new List<Object> { rootGroup };
+            AddUndoTarget(undoTargets, nameLabel);
+            AddUndoTarget(undoTargets, bodyText);
+            AddUndoTarget(undoTargets, arrowButton != null ? arrowButton.gameObject : null);
+            AddUndoTarget(undoTargets, continueButton != null ? continueButton.gameObject : null);
+            AddUndoTarget(undoTargets, continueGroup);
+            Undo.RecordObjects(undoTargets.ToArray(), visible ? "Preview Judge Speech UI" : "Hide Judge Speech UI Preview");
+
+            ApplyPreviewState(rootGroup, nameLabel, bodyText, arrowButton, continueButton, continueGroup, visible);
+            EditorSceneManager.MarkSceneDirty(speechUI.gameObject.scene);
+
+            if (visible)
+            {
+                GameObject selectionTarget = bodyText != null ? bodyText.gameObject : speechUI.gameObject;
+                Selection.activeGameObject = selectionTarget;
+                EditorGUIUtility.PingObject(selectionTarget);
+                Debug.Log("Judge speech UI preview is visible. Edit BodyText under Canvas/JudgeSpeechUI/SpeechPanel to adjust the speech appearance.");
+            }
+        }
+
+        private static void ApplyPreviewState(
+            CanvasGroup rootGroup,
+            TMP_Text nameLabel,
+            TMP_Text bodyText,
+            Button arrowButton,
+            Button continueButton,
+            CanvasGroup continueGroup,
+            bool visible)
+        {
+            rootGroup.alpha = visible ? 1f : 0f;
+            rootGroup.interactable = false;
+            rootGroup.blocksRaycasts = false;
+
+            if (visible)
+            {
+                if (nameLabel != null && string.IsNullOrWhiteSpace(nameLabel.text))
+                {
+                    nameLabel.text = SampleJudgeName;
+                }
+
+                if (bodyText != null)
+                {
+                    if (string.IsNullOrWhiteSpace(bodyText.text))
+                    {
+                        bodyText.text = SampleSpeech;
+                    }
+
+                    bodyText.maxVisibleCharacters = int.MaxValue;
+                }
+            }
+
+            if (arrowButton != null)
+            {
+                arrowButton.gameObject.SetActive(visible);
+            }
+
+            if (continueButton != null)
+            {
+                continueButton.gameObject.SetActive(visible);
+            }
+
+            if (continueGroup != null)
+            {
+                continueGroup.alpha = visible ? 1f : 0f;
+                continueGroup.interactable = false;
+                continueGroup.blocksRaycasts = false;
+            }
+        }
+
+        private static void AddUndoTarget(List<Object> targets, Object target)
+        {
+            if (target != null)
+            {
+                targets.Add(target);
+            }
         }
 
         private static void ConfigureSequence(UnityEngine.SceneManagement.Scene activeScene, JudgeSpeechUI speechUI)

@@ -25,6 +25,11 @@ namespace SharkTank.UI
         public event Action OnFinished;
 
         /// <summary>
+        /// Occurs when the current text begins revealing.
+        /// </summary>
+        public event Action OnTypingStarted;
+
+        /// <summary>
         /// Gets whether the current text is still being revealed.
         /// </summary>
         public bool IsTyping { get; private set; }
@@ -60,6 +65,7 @@ namespace SharkTank.UI
                 return;
             }
 
+            OnTypingStarted?.Invoke();
             typingCoroutine = StartCoroutine(RevealCharacters());
         }
 
