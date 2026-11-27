@@ -31,7 +31,6 @@ namespace SharkTank.Simulator
         private TrackMode activeTrackMode;
         private bool playerTrackHasStarted;
         private bool judgeTrackHasStarted;
-        private bool musicInitialized;
 
         private void Awake()
         {
@@ -51,14 +50,11 @@ namespace SharkTank.Simulator
             {
                 Debug.LogWarning("Assign both background music tracks on BGMManager.", this);
             }
-
-            musicInitialized = true;
-            PlayPlayerTrack();
         }
 
         private void OnEnable()
         {
-            if (musicInitialized)
+            if (playerTrackHasStarted || judgeTrackHasStarted)
             {
                 SetActiveTrack(activeTrackMode);
             }

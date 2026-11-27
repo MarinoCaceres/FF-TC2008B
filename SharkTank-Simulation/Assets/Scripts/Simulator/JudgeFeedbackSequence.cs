@@ -44,6 +44,16 @@ namespace SharkTank.UI
         [Tooltip("Local-right camera offset used only during feedback, shifting each judge left in frame.")]
         [SerializeField] private float judgeFeedbackRightOffset = 1f;
 
+        [Header("Offer indicators")]
+        [Tooltip("Exclamation objects for judges 1, 2, and 3, in left-to-right order.")]
+        [SerializeField] private Transform[] offerIndicators = new Transform[JudgeCount];
+        [Tooltip("How far each visible exclamation moves above and below its starting position.")]
+        [Min(0f)]
+        [SerializeField] private float offerIndicatorFloatAmplitude = 0.18f;
+        [Tooltip("Duration of one full up-and-down float cycle, in seconds.")]
+        [Min(0.1f)]
+        [SerializeField] private float offerIndicatorFloatPeriod = 2.8f;
+
         [Header("Feedback")]
         [Tooltip("Controller for the three judge chairs.")]
         [SerializeField] private JudgeChairsController chairsController;
@@ -73,6 +83,8 @@ namespace SharkTank.UI
         private readonly bool[] judgesHaveOffers = new bool[JudgeCount];
         private readonly bool[] judgesAlreadyDecided = new bool[JudgeCount];
         private readonly JudgeFadeState[] judgeFadeStates = new JudgeFadeState[JudgeCount];
+        private readonly Vector3[] offerIndicatorBasePositions = new Vector3[JudgeCount];
+        private readonly float[] offerIndicatorFloatStartTimes = new float[JudgeCount];
         private Vector3 judgesTopDownOverviewBasePosition;
         private bool hasCapturedTopDownOverviewPosition;
 
@@ -107,6 +119,11 @@ namespace SharkTank.UI
         public event Action<int> OnJudgeOutPresented;
 
         /// <summary>
+        /// Occurs when an out judge begins fading away.
+        /// </summary>
+        public event Action<int> OnJudgeDisappearing;
+
+        /// <summary>
         /// Gets whether a feedback sequence is currently running.
         /// </summary>
         public bool IsPlaying => sequenceCoroutine != null;
@@ -115,6 +132,11 @@ namespace SharkTank.UI
         /// Gets whether the sequence is waiting for the current judge's question response.
         /// </summary>
         public bool IsWaitingForQuestionResponse => awaitingQuestionResponse;
+
+        /// <summary>
+        /// Gets the dialogue UI shared by judge feedback and the final session summary.
+        /// </summary>
+        public JudgeSpeechUI SpeechUI => speechUI;
 
         /// <summary>
         /// Gets whether every judge has made an offer or is out.
@@ -137,7 +159,32 @@ namespace SharkTank.UI
 
         private void Awake()
         {
+            CaptureOfferIndicatorBasePositions();
+            SetAllOfferIndicatorsVisible(false);
             CaptureTopDownOverviewPosition();
+        }
+
+        private void Update()
+        {
+            if (offerIndicatorFloatAmplitude <= 0f || offerIndicatorFloatPeriod <= 0f)
+            {
+                return;
+            }
+
+            float angularSpeed = 2f * Mathf.PI / offerIndicatorFloatPeriod;
+            for (int i = 0; i < JudgeCount; i++)
+            {
+                Transform indicator = GetOfferIndicator(i);
+                if (indicator == null || !indicator.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                Vector3 localPosition = offerIndicatorBasePositions[i];
+                float elapsed = Time.unscaledTime - offerIndicatorFloatStartTimes[i];
+                localPosition.y += Mathf.Sin(elapsed * angularSpeed) * offerIndicatorFloatAmplitude;
+                indicator.localPosition = localPosition;
+            }
         }
 
         private void OnEnable()
@@ -331,7 +378,8 @@ namespace SharkTank.UI
             bool showedJudgeSpeech = false;
             for (int judgeIndex = 0; judgeIndex < JudgeCount; judgeIndex++)
             {
-                if (IsJudgeDecided(judgeIndex))
+                JudgeFeedbackData judgeFeedback = feedback[judgeIndex];
+                if (judgeFeedback.skipFeedback || IsJudgeDecided(judgeIndex))
                 {
                     continue;
                 }
@@ -349,45 +397,102 @@ namespace SharkTank.UI
                 OnJudgeSpeakingStarted?.Invoke(judgeIndex);
                 yield return speechUI.Show();
 
-                JudgeFeedbackData judgeFeedback = feedback[judgeIndex];
-                string firstText = judgeFeedback.isOut
-                    ? string.IsNullOrWhiteSpace(judgeFeedback.outText)
-                        ? "Estoy fuera; no haré una oferta."
-                        : judgeFeedback.outText
-                    : string.IsNullOrWhiteSpace(judgeFeedback.likedText)
-                        ? "Todavía no me convences del todo."
-                        : judgeFeedback.likedText;
-                string secondText = judgeFeedback.isOut
-                    ? string.IsNullOrWhiteSpace(judgeFeedback.outReason)
-                        ? "El proyecto no se ajusta a lo que busco en una inversión."
-                        : judgeFeedback.outReason
-                    : !string.IsNullOrWhiteSpace(judgeFeedback.offerText)
+                if (judgeFeedback.isApiResponse)
+                {
+                    string apiText = !string.IsNullOrWhiteSpace(judgeFeedback.offerText)
                         ? judgeFeedback.offerText
-                    : string.IsNullOrWhiteSpace(judgeFeedback.criticismText)
-                        ? isPitchRound
-                            ? "¡Presentaste muy bien tus ideas!"
-                            : "¡Respondiste muy bien a mis dudas!"
-                        : judgeFeedback.criticismText;
+                        : judgeFeedback.isOut
+                            ? judgeFeedback.outText
+                            : judgeFeedback.likedText;
+                    if (string.IsNullOrWhiteSpace(apiText))
+                    {
+                        Debug.LogWarning("JudgeFeedbackSequence received an empty API response for " + judgeFeedback.judgeName + ".", this);
+                        yield return speechUI.Hide();
+                        continue;
+                    }
 
-                speechUI.ShowText(judgeFeedback.judgeName, firstText);
-                OnSpeechBoxShown?.Invoke(judgeIndex, 0);
-                if (judgeFeedback.isOut)
-                {
-                    OnJudgeOutPresented?.Invoke(judgeIndex);
+                    if (judgeFeedback.isOut)
+                    {
+                        OnJudgeOutPresented?.Invoke(judgeIndex);
+                    }
+                    else if (!string.IsNullOrWhiteSpace(judgeFeedback.offerText))
+                    {
+                        SetOfferIndicatorVisible(judgeIndex, true);
+                        OnJudgeOfferPresented?.Invoke(judgeIndex);
+                    }
+
+                    string[] speechSegments = judgeFeedback.speechSegments;
+                    if (speechSegments == null || speechSegments.Length == 0)
+                    {
+                        speechSegments = new[] { apiText };
+                    }
+
+                    bool showedApiSpeech = false;
+                    for (int segmentIndex = 0; segmentIndex < speechSegments.Length; segmentIndex++)
+                    {
+                        string speechSegment = speechSegments[segmentIndex];
+                        if (string.IsNullOrWhiteSpace(speechSegment))
+                        {
+                            continue;
+                        }
+
+                        showedApiSpeech = true;
+                        speechUI.ShowText(judgeFeedback.judgeName, speechSegment);
+                        OnSpeechBoxShown?.Invoke(judgeIndex, segmentIndex);
+                        arrowPressed = false;
+                        yield return new WaitUntil(() => arrowPressed);
+                    }
+
+                    if (!showedApiSpeech)
+                    {
+                        speechUI.ShowText(judgeFeedback.judgeName, apiText);
+                        OnSpeechBoxShown?.Invoke(judgeIndex, 0);
+                        arrowPressed = false;
+                        yield return new WaitUntil(() => arrowPressed);
+                    }
                 }
-
-                arrowPressed = false;
-                yield return new WaitUntil(() => arrowPressed);
-
-                speechUI.ShowText(judgeFeedback.judgeName, secondText);
-                OnSpeechBoxShown?.Invoke(judgeIndex, 1);
-                if (!judgeFeedback.isOut && !string.IsNullOrWhiteSpace(judgeFeedback.offerText))
+                else
                 {
-                    OnJudgeOfferPresented?.Invoke(judgeIndex);
-                }
+                    string firstText = judgeFeedback.isOut
+                        ? string.IsNullOrWhiteSpace(judgeFeedback.outText)
+                            ? "Estoy fuera; no haré una oferta."
+                            : judgeFeedback.outText
+                        : string.IsNullOrWhiteSpace(judgeFeedback.likedText)
+                            ? "Todavía no me convences del todo."
+                            : judgeFeedback.likedText;
+                    string secondText = judgeFeedback.isOut
+                        ? string.IsNullOrWhiteSpace(judgeFeedback.outReason)
+                            ? "El proyecto no se ajusta a lo que busco en una inversión."
+                            : judgeFeedback.outReason
+                        : !string.IsNullOrWhiteSpace(judgeFeedback.offerText)
+                            ? judgeFeedback.offerText
+                        : string.IsNullOrWhiteSpace(judgeFeedback.criticismText)
+                            ? isPitchRound
+                                ? "¡Presentaste muy bien tus ideas!"
+                                : "¡Respondiste muy bien a mis dudas!"
+                            : judgeFeedback.criticismText;
 
-                arrowPressed = false;
-                yield return new WaitUntil(() => arrowPressed);
+                    speechUI.ShowText(judgeFeedback.judgeName, firstText);
+                    OnSpeechBoxShown?.Invoke(judgeIndex, 0);
+                    if (judgeFeedback.isOut)
+                    {
+                        OnJudgeOutPresented?.Invoke(judgeIndex);
+                    }
+
+                    arrowPressed = false;
+                    yield return new WaitUntil(() => arrowPressed);
+
+                    speechUI.ShowText(judgeFeedback.judgeName, secondText);
+                    OnSpeechBoxShown?.Invoke(judgeIndex, 1);
+                    if (!judgeFeedback.isOut && !string.IsNullOrWhiteSpace(judgeFeedback.offerText))
+                    {
+                        SetOfferIndicatorVisible(judgeIndex, true);
+                        OnJudgeOfferPresented?.Invoke(judgeIndex);
+                    }
+
+                    arrowPressed = false;
+                    yield return new WaitUntil(() => arrowPressed);
+                }
 
                 if (!string.IsNullOrWhiteSpace(judgeFeedback.question))
                 {
@@ -410,6 +515,7 @@ namespace SharkTank.UI
                 showedJudgeSpeech = true;
                 if (judgeFeedback.isOut && PrepareJudgeFadeState(judgeIndex))
                 {
+                    OnJudgeDisappearing?.Invoke(judgeIndex);
                     yield return FadeOutJudgeModel(judgeIndex);
                     judgesOut[judgeIndex] = true;
                 }
@@ -807,8 +913,57 @@ namespace SharkTank.UI
             {
                 judgesOut[i] = false;
                 judgesHaveOffers[i] = false;
+                SetOfferIndicatorVisible(i, false);
                 RestoreJudgeModel(i);
             }
+        }
+
+        private void SetAllOfferIndicatorsVisible(bool isVisible)
+        {
+            for (int i = 0; i < JudgeCount; i++)
+            {
+                SetOfferIndicatorVisible(i, isVisible);
+            }
+        }
+
+        private void SetOfferIndicatorVisible(int judgeIndex, bool isVisible)
+        {
+            Transform indicator = GetOfferIndicator(judgeIndex);
+            if (indicator == null)
+            {
+                Debug.LogWarning("JudgeFeedbackSequence is missing the offer indicator for judge index " + judgeIndex + ".", this);
+                return;
+            }
+
+            indicator.localPosition = offerIndicatorBasePositions[judgeIndex];
+            if (isVisible)
+            {
+                offerIndicatorFloatStartTimes[judgeIndex] = Time.unscaledTime;
+            }
+
+            indicator.gameObject.SetActive(isVisible);
+        }
+
+        private void CaptureOfferIndicatorBasePositions()
+        {
+            for (int i = 0; i < JudgeCount; i++)
+            {
+                Transform indicator = GetOfferIndicator(i);
+                if (indicator != null)
+                {
+                    offerIndicatorBasePositions[i] = indicator.localPosition;
+                }
+            }
+        }
+
+        private Transform GetOfferIndicator(int judgeIndex)
+        {
+            if (offerIndicators == null || judgeIndex < 0 || judgeIndex >= offerIndicators.Length)
+            {
+                return null;
+            }
+
+            return offerIndicators[judgeIndex];
         }
 
         private static bool SupportsFade(Material material)

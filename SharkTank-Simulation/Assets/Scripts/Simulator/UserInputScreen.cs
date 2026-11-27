@@ -129,7 +129,7 @@ namespace SharkTank.UI
 
             if (inputField != null)
             {
-                inputField.characterLimit = 800;
+                inputField.characterLimit = 2000;
                 inputField.onValueChanged.AddListener(HandleInputChanged);
             }
 
