@@ -21,6 +21,7 @@ namespace SharkTank.Simulator
             PitchFeedback,
             DecisionRound,
             FinalDecision,
+            OfferDecision,
             AnswerInput,
             Summary,
             Complete
@@ -65,6 +66,11 @@ namespace SharkTank.Simulator
         };
         [Tooltip("Existing dialogue UI used to present the API's final evaluation.")]
         [SerializeField] private JudgeSpeechUI sessionSummaryUI;
+        [Header("Offer and finish screens")]
+        [Tooltip("Screen where the player accepts or declines each judge's offer.")]
+        [SerializeField] private OfferUI offerUI;
+        [Tooltip("Final screen with the stats and the END button.")]
+        [SerializeField] private FinishUI finishUI;
 
         private TestStage currentStage;
         private TestStage questionReturnStage;
@@ -78,6 +84,13 @@ namespace SharkTank.Simulator
         [Tooltip("Use only Judge 1's API profile; Judges 2 and 3 use hardcoded test feedback.")]
         [SerializeField] private bool useSingleAgentTestMode;
         private bool summaryTextFinished;
+        private readonly List<KeyValuePair<string, string>> collectedOffers =
+            new List<KeyValuePair<string, string>>();
+        private string acceptedJudge;
+        private string acceptedOfferText;
+        private bool offerDecided;
+        private bool offerAccepted;
+        private bool finishEndPressed;
         private bool summaryContinuePressed;
         private string apiSessionId;
         private JudgeFeedbackData[] pendingApiFeedback;
@@ -154,6 +167,18 @@ namespace SharkTank.Simulator
                 sessionSummaryUI.OnContinuePressed -= HandleSummaryContinuePressed;
                 sessionSummaryUI.OnContinuePressed += HandleSummaryContinuePressed;
             }
+
+            if (offerUI != null)
+            {
+                offerUI.OnDecision -= HandleOfferDecision;
+                offerUI.OnDecision += HandleOfferDecision;
+            }
+
+            if (finishUI != null)
+            {
+                finishUI.OnEndPressed -= HandleFinishEndPressed;
+                finishUI.OnEndPressed += HandleFinishEndPressed;
+            }
         }
 
         private void OnDisable()
@@ -189,6 +214,15 @@ namespace SharkTank.Simulator
                 introCoroutine = null;
                 sfxManager?.StopPlatformRiseSound();
                 currentStage = TestStage.Idle;
+            }
+            if (offerUI != null)
+            {
+                offerUI.OnDecision -= HandleOfferDecision;
+            }
+
+            if (finishUI != null)
+            {
+                finishUI.OnEndPressed -= HandleFinishEndPressed;
             }
         }
 
@@ -230,6 +264,54 @@ namespace SharkTank.Simulator
 
             useSingleAgentTestMode = false;
             Debug.Log("All three judges will use the API.", this);
+        }
+        [ContextMenu("Test: Offer and Finish screens (no API)")]
+        private void TestOfferAndFinishScreens()
+        {
+            if (!Application.isPlaying)
+            {
+                Debug.LogWarning("Start the scene in Play Mode before testing the offer and finish screens.", this);
+                return;
+            }
+
+            StartCoroutine(RunOfferAndFinishTest());
+        }
+
+        private IEnumerator RunOfferAndFinishTest()
+        {
+            if (offerUI == null || finishUI == null)
+            {
+                Debug.LogWarning("Assign Offer UI and Finish UI before running this test.", this);
+                yield break;
+            }
+
+            KeyValuePair<string, string>[] fakeOffers =
+            {
+                new KeyValuePair<string, string>("Master Shark", "Te ofrezco invertir $150,000 por el 10% de tu empresa."),
+                new KeyValuePair<string, string>("Don Capital", "Te ofrezco invertir $200,000 por el 12% de tu empresa.")
+            };
+
+            string dealResult = "Rechazaste todas las ofertas.";
+            foreach (KeyValuePair<string, string> offer in fakeOffers)
+            {
+                offerDecided = false;
+                yield return offerUI.ShowOffer(offer.Key, offer.Value);
+                yield return new WaitUntil(() => offerDecided);
+                yield return offerUI.Hide();
+
+                if (offerAccepted)
+                {
+                    dealResult = "Trato cerrado con " + offer.Key + ":\n" + offer.Value;
+                    break;
+                }
+            }
+
+            finishEndPressed = false;
+            yield return finishUI.ShowStats(
+                "Coherencia: 8/10\nFormalidad: 7/10\nManejo de los tiburones: 9/10\nCalidad del pitch: 8/10\n\n" + dealResult);
+            yield return new WaitUntil(() => finishEndPressed);
+            yield return finishUI.Hide();
+            Debug.Log("Prueba de pantallas terminada.", this);
         }
 
         private bool CanChangeAgentMode()
@@ -401,6 +483,9 @@ namespace SharkTank.Simulator
             questionRoundsCompleted = 0;
             decisionRoundIndex = 0;
             Array.Clear(apiJudgesDecided, 0, apiJudgesDecided.Length);
+            collectedOffers.Clear();
+            acceptedJudge = null;
+            acceptedOfferText = null;
             pendingApiFeedback = null;
 
             SharkTankApiClient.OperationResult<SharkTankApiClient.RoundOutput> result =
@@ -453,7 +538,7 @@ namespace SharkTank.Simulator
                 case TestStage.DecisionRound:
                     if (judgeFeedbackSequence.AreAllJudgesDecided)
                     {
-                        StartSummaryRequest();
+                        StartOfferPhase();
                         break;
                     }
 
@@ -471,7 +556,7 @@ namespace SharkTank.Simulator
                 case TestStage.FinalDecision:
                     if (judgeFeedbackSequence.AreAllJudgesDecided)
                     {
-                        StartSummaryRequest();
+                        StartOfferPhase();
                     }
                     else
                     {
@@ -607,7 +692,10 @@ namespace SharkTank.Simulator
                     error = "The response from " + sharkName + " has an unsupported type: " + response.type + ".";
                     return false;
                 }
-
+                if (isOffer)
+                {
+                    collectedOffers.Add(new KeyValuePair<string, string>(sharkName, response.content));
+                }
                 if (isFinalDecision && isQuestion)
                 {
                     error = "The final-decision response from " + sharkName + " was another question.";
@@ -822,6 +910,87 @@ namespace SharkTank.Simulator
             currentStage = TestStage.Summary;
             responseCoroutine = StartCoroutine(RequestSummaryAndShow());
         }
+        private void StartOfferPhase()
+        {
+            if (currentStage == TestStage.OfferDecision ||
+                currentStage == TestStage.Summary ||
+                currentStage == TestStage.Complete)
+            {
+                return;
+            }
+
+            if (offerUI == null || collectedOffers.Count == 0)
+            {
+                StartSummaryRequest();
+                return;
+            }
+
+            currentStage = TestStage.OfferDecision;
+            responseCoroutine = StartCoroutine(RunOfferDecisions());
+        }
+
+        private IEnumerator RunOfferDecisions()
+        {
+            foreach (KeyValuePair<string, string> offer in collectedOffers)
+            {
+                offerDecided = false;
+                yield return offerUI.ShowOffer(offer.Key, offer.Value);
+                yield return new WaitUntil(() => offerDecided);
+                yield return offerUI.Hide();
+
+                if (offerAccepted)
+                {
+                    acceptedJudge = offer.Key;
+                    acceptedOfferText = offer.Value;
+                    break;
+                }
+            }
+
+            responseCoroutine = null;
+            StartSummaryRequest();
+        }
+
+        private void HandleOfferDecision(bool accepted)
+        {
+            offerAccepted = accepted;
+            offerDecided = true;
+        }
+
+        private void HandleFinishEndPressed()
+        {
+            finishEndPressed = true;
+        }
+
+        private string BuildFinishStats(
+            SharkTankApiClient.OperationResult<SharkTankApiClient.SummaryOutput> summary)
+        {
+            StringBuilder text = new StringBuilder();
+            if (summary.Succeeded && IsValidSummary(summary.Value))
+            {
+                SharkTankApiClient.SummaryOutput s = summary.Value;
+                text.AppendLine("Coherencia: " + s.coherence.score + "/10");
+                text.AppendLine("Formalidad: " + s.formality.score + "/10");
+                text.AppendLine("Manejo de los tiburones: " + s.approach.score + "/10");
+                text.AppendLine("Calidad del pitch: " + s.pitch_quality.score + "/10");
+                text.AppendLine();
+            }
+
+            if (acceptedJudge != null)
+            {
+                text.AppendLine("Trato cerrado con " + acceptedJudge + ":");
+                text.AppendLine(acceptedOfferText);
+            }
+            else if (collectedOffers.Count > 0)
+            {
+                text.AppendLine("Rechazaste todas las ofertas.");
+            }
+            else
+            {
+                text.AppendLine("Ningún juez hizo una oferta.");
+            }
+
+            return text.ToString();
+        }
 
         private IEnumerator RequestSummaryAndShow()
         {
@@ -870,7 +1039,13 @@ namespace SharkTank.Simulator
             {
                 Debug.LogWarning("Could not delete the completed judge API session: " + deleteResult.Error, this);
             }
-
+            if (finishUI != null)
+            {
+                finishEndPressed = false;
+                yield return finishUI.ShowStats(BuildFinishStats(result));
+                yield return new WaitUntil(() => finishEndPressed);
+                yield return finishUI.Hide();
+            }
             apiSessionId = null;
             currentStage = TestStage.Complete;
             responseCoroutine = null;
