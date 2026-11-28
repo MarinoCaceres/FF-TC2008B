@@ -379,8 +379,9 @@ namespace SharkTank.Simulator
 
             SharkTankApiClient.OperationResult<SharkTankApiClient.SessionOutput> sessionResult =
                 new SharkTankApiClient.OperationResult<SharkTankApiClient.SessionOutput>();
+            SharkTankApiClient.SharkSetup[] configuredProfiles = BuildProfilesFromCustomization();
             SharkTankApiClient.SharkSetup[] selectedProfiles =
-                useSingleAgentTestMode ? new[] { agentProfiles[0] } : agentProfiles;
+                useSingleAgentTestMode ? new[] { configuredProfiles[0] } : configuredProfiles;
             Debug.Log(
                 useSingleAgentTestMode
                     ? "Creating API session with exactly 1 agent: " + agentProfiles[0].name + ". Judges 2 and 3 use hardcoded feedback."
@@ -430,6 +431,37 @@ namespace SharkTank.Simulator
 
             responseCoroutine = null;
             Debug.Log("Pitch enviado a los agentes.", this);
+        }
+
+        /// <summary>
+        /// Copies the agent profiles and applies the judge modifiers chosen in the customization screen
+        /// (modifier1 = escepticismo, modifier2 = presión). Falls back to the Inspector values without a GameManager.
+        /// </summary>
+        private SharkTankApiClient.SharkSetup[] BuildProfilesFromCustomization()
+        {
+            GameManager gm = GameManager.Instance;
+            SharkTankApiClient.SharkSetup[] profiles = new SharkTankApiClient.SharkSetup[agentProfiles.Length];
+
+            for (int i = 0; i < agentProfiles.Length; i++)
+            {
+                SharkTankApiClient.SharkSetup source = agentProfiles[i];
+                SharkTankApiClient.SharkSetup profile = new SharkTankApiClient.SharkSetup
+                {
+                    name = source.name,
+                    modifier1 = source.modifier1,
+                    modifier2 = source.modifier2
+                };
+
+                if (gm != null && i < GameManager.JudgeCount)
+                {
+                    profile.modifier1 = gm.GetJudgeValue(i, 0);
+                    profile.modifier2 = gm.GetJudgeValue(i, 1);
+                }
+
+                profiles[i] = profile;
+            }
+
+            return profiles;
         }
 
         private void HandleFeedbackFinished()
